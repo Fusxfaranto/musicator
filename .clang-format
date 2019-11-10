@@ -1,0 +1,13 @@
+BasedOnStyle: Chromium
+IndentWidth: 4
+UseTab: Never
+TabWidth: 4
+ContinuationIndentWidth: 8
+ConstructorInitializerIndentWidth: 8
+AccessModifierOffset: -4
+IndentCaseLabels: false
+BreakStringLiterals: false
+AlignAfterOpenBracket: AlwaysBreak
+ColumnLimit: 70
+BinPackArguments: false
+BinPackParameters: false
