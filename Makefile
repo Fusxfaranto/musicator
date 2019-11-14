@@ -18,7 +18,7 @@ OBJS := $(C_OBJS) $(D_OBJS)
 DC := ldc2
 #DC := dmd
 
-CFLAGS := -m64 -fPIC -g -c -O3 -std=c11 -pedantic -Wall -Werror -Wno-error=unused-variable -Iinclude #-I/usr/include/freetype2/ #-Iftgl/src/
+CFLAGS := -m64 -fPIC -g -c -O3 -std=c11 -pedantic -Wall -Werror -Wno-error=unused-variable -Wmissing-field-initializers -Iinclude #-I/usr/include/freetype2/ #-Iftgl/src/
 CFLAGS += -Icubeb/include/ -Icubeb/build/exports/
 #CLDFLAGS += -Lcubeb/build/ -llibcubeb
 CSTATIC_LIBS := cubeb/build/libcubeb.a
