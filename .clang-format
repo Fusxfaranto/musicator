@@ -8,6 +8,6 @@ AccessModifierOffset: -4
 IndentCaseLabels: false
 BreakStringLiterals: false
 AlignAfterOpenBracket: AlwaysBreak
-ColumnLimit: 70
+ColumnLimit: 60
 BinPackArguments: false
 BinPackParameters: false
