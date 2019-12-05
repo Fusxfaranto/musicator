@@ -1,3 +1,6 @@
 [submodule "cubeb"]
 	path = cubeb
 	url = https://github.com/kinetiknz/cubeb.git
+[submodule "rtmidi"]
+	path = rtmidi
+	url = https://github.com/thestk/rtmidi.git

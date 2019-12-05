@@ -50,8 +50,6 @@ typedef struct {
 
     Note* note_buf;
     uint note_buf_size;
-    // TODO if we're only touching this from data_cb, does
-    // it need to be atomic?
     atomic_uint_fast32_t note_next_id;
 
     Event* event_buf;
@@ -131,7 +129,7 @@ static long data_cb(
         // TODO is atomic_load necessary here?
         uint event_idx = atomic_load(&p->event_pos);
         if (!atomic_load(&p->event_ready[event_idx])) {
-            printf("current event not ready");
+            printf("current event not ready\n");
             for (uint i = 0; i < n; i++) {
                 for (uint c = 0; c < 2; c++) {
                     out[2 * i + c] = 0;
@@ -144,9 +142,20 @@ static long data_cb(
                 (event_idx + 1) % p->event_buf_size;
 
         Event* e = &p->event_buf[next_event_idx];
-        uint64_t next_c = e->at_count;
-        uint64_t next_n =
-                next_c < end ? next_c - p->c : end - p->c;
+        uint64_t next_n;
+        if (atomic_load(&p->event_ready[next_event_idx])) {
+            uint64_t next_c = e->at_count;
+            if (next_c < p->c) {
+                next_c = p->c;
+            }
+            if (next_c < end) {
+                next_n = next_c - p->c;
+            } else {
+                next_n = end - p->c;
+            }
+        } else {
+            next_n = end - p->c;
+        }
 
         uint note_buf_idx = (uint)-1;
         // TODO something faster if we're not updating an
@@ -229,11 +238,11 @@ static void init_stream_priv(
         StreamPriv* p,
         uint sample_rate) {
     uint ebl = 4096;
-    uint nbl = 3;
+    uint nbl = 64;
     *p = (StreamPriv){
             .c = 0,
             .sample_rate = sample_rate,
-            .volume = 0.3,
+            .volume = 0.1,
 
             .note_buf = malloc(sizeof(Note) * nbl),
             .note_buf_size = nbl,

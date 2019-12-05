@@ -36,20 +36,28 @@ LDFLAGS += -L=-l:libmusicator.a
 LDFLAGS += -L=-Llib -L=-Lout
 LDFLAGS += -L=-lm
 LDFLAGS += -L=-lstdc++
+LDFLAGS += -L=-lasound -L=-lpthread
 
+RTMIDI_OBJS := out/rtmidi/rtmidi.o out/rtmidi/rtmidi_c.o
 
 .PHONY: all clean distclean
 
 all: $(NAME)
 
-$(NAME): $(D_OBJS) out/libmusicator.a
+$(NAME): $(D_OBJS) out/libmusicator.a $(RTMIDI_OBJS)
 #	$(DC) $(OBJS) $(LDFLAGS) -o $(NAME)
-	$(DC) $(OBJS) $(LDFLAGS) -of$(NAME)
+	$(DC) $(OBJS) $(RTMIDI_OBJS) $(LDFLAGS) -of$(NAME)
 
 $(D_OBJS): $(D_SRCS) $(C_HEADERS)
 #	dstep $(C_HEADERS) $(CFLAGS) -o ./bindings/
 	dstep $(C_HEADERS) $(CFLAGS) -o c_bindings.d
 	$(DC) $(D_SRCS) $(DFLAGS) -od=out
+
+$(RTMIDI_OBJS): rtmidi/*.cpp rtmidi/*.h
+	mkdir -p out/rtmidi
+	dstep rtmidi/rtmidi_c.h -o rtmidi_c.d
+	g++ -c -O0 -g -Wall -D__LINUX_ALSA__ -o out/rtmidi/rtmidi.o -I rtmidi rtmidi/RtMidi.cpp
+	g++ -c -O0 -g -Wall -D__LINUX_ALSA__ -o out/rtmidi/rtmidi_c.o -I rtmidi rtmidi/rtmidi_c.cpp
 
 out/libmusicator.a: $(C_OBJS)
 #	ar rcs out/libmusicator.a $(C_OBJS) $(CSTATIC_LIBS)
@@ -67,5 +75,6 @@ $(C_OBJS): $(C_SRCS) $(C_HEADERS)
 clean:
 	@- $(RM) $(NAME)
 	@- $(RM) $(OBJS)
+	@- $(RM) -rf out/*
 
 distclean: clean
