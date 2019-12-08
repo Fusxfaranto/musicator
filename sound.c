@@ -38,6 +38,47 @@ ATOMIC_INC_MOD_FUNC(uint_fast32_t);
 // TODO _Generic?
 #define atomic_inc_mod atomic_inc_mod_uint_fast32_t
 
+#define BC_STACK_SIZE 1024
+typedef double BCStack[BC_STACK_SIZE];
+
+double run_bytecode(const BCItem* bc, uint bc_len, uint64_t sample_num, uint sample_rate) {
+    BCStack stack = {0};
+    int ip = 0;
+    int sp = 0;
+
+    while (ip < bc_len) {
+        switch (bc[ip++].op) {
+        case BCOP_PUSH_FLT:
+            stack[sp++] = bc[ip++].flt;
+            break;
+
+        case BCOP_PUSH_T:
+            stack[sp++] = (double)sample_num / (double)sample_rate;
+            break;
+
+        case BCOP_ADD:
+            sp--;
+            assert(sp > 0);
+            stack[sp - 1] = stack[sp - 1] + stack[sp];
+            break;
+
+        case BCOP_MUL:
+            sp--;
+            assert(sp > 0);
+            stack[sp - 1] = stack[sp - 1] * stack[sp];
+            break;
+
+        case BCOP_SIN:
+            assert(sp > 0);
+            stack[sp - 1] = sin(stack[sp - 1]);
+            break;
+        }
+    }
+
+    assert(sp == 1);
+    return stack[--sp];
+}
+
 typedef struct {
     uint64_t at_count;
     Note note;
@@ -191,14 +232,15 @@ static long data_cb(
                     break;
 
                 case NOTE_STATE_ON:
-                    r += overtones(
-                            i + p->c,
-                            p->note_buf[note_idx].pitch,
-                            p->note_buf[note_idx]
-                                    .instr->ot_amps,
-                            p->note_buf[note_idx]
-                                    .instr->ot_num,
-                            p->sample_rate);
+                    /* r += overtones( */
+                    /*         i + p->c, */
+                    /*         p->note_buf[note_idx].pitch, */
+                    /*         p->note_buf[note_idx] */
+                    /*                 .instr->ot_amps, */
+                    /*         p->note_buf[note_idx] */
+                    /*                 .instr->ot_num, */
+                    /*         p->sample_rate); */
+                    r += run_bytecode(p->note_buf[note_idx].bc, p->note_buf[note_idx].bc_len, i + p->c, p->sample_rate);
                     break;
                 }
             }

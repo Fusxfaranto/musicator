@@ -9,28 +9,32 @@ typedef _Bool bool;
 #define PI 3.14159265358979323846
 #define SEMITONE 1.0594630943592952646
 
+typedef enum {
+    BCOP_PUSH_FLT,
+    BCOP_PUSH_T,
+    BCOP_ADD,
+    BCOP_MUL,
+    BCOP_SIN,
+} BCOp;
+
 typedef struct {
-    // TODO very temporary
-    double* ot_amps;
-    uint ot_num;
-} Instrument;
+    union {
+        BCOp op;
+        double flt;
+    };
+} BCItem;
 
 typedef enum {
     NOTE_STATE_OFF,
     NOTE_STATE_ON,
 } NoteState;
 
-// TODO some part of this needs to be atomic, otherwise this
-// is thread unsafe
 typedef struct {
     uint id;
     NoteState state;
 
-    // TODO generic params
-    double pitch;
-
-    // TODO use an index instead?
-    Instrument* instr;
+    BCItem* bc;
+    uint bc_len;
 } Note;
 
 typedef struct AudioContext AudioContext;

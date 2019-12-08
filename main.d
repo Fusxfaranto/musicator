@@ -1,11 +1,13 @@
 import std.datetime : dur;
 import std.exception : enforce;
-import std.math : pow;
+import std.math : PI, pow;
 import std.process : executeShell;
 import std.stdio : writeln, writefln;
 
 import core.stdc.string : strlen;
 import core.thread : Thread;
+
+import util;
 
 import c_bindings;
 
@@ -20,6 +22,7 @@ import rtmidi_c;
 
 AudioContext* ctx;
 Note[128] key_notes;
+BCItem[][128] key_progs;
 bool[128] key_held = false;
 bool midi_suspend = false;
 
@@ -98,36 +101,29 @@ void main() {
     scope (exit)
         enforce(stop_audio(ctx) == 0);
 
-    static double[] asdf_ots = [
-        1.0, 1.0, 0.5, 0.5, 0.4, 0.3,
-        0.2, 0.2, 0.1, 0.1, 0.1,
-    ];
-    // TODO lol
-    static Instrument asdf;
-    asdf.ot_amps = asdf_ots.ptr;
-    asdf.ot_num = asdf_ots.length;
+    // static double[] asdf_ots = [
+    //     1.0, 1.0, 0.5, 0.5, 0.4, 0.3,
+    //     0.2, 0.2, 0.1, 0.1, 0.1,
+    // ];
 
     auto sample_rate = get_sample_rate(ctx);
 
     for (int i = 0; i < 128; i++) {
         double pitch = 440 * pow(2, (i - 69) / 12.0);
-        key_notes[i] = Note(0,
-                NoteState.NOTE_STATE_OFF, pitch, &asdf);
-    }
 
-    if (false) {
-        // TODO
-        uint l = 12;
-        double pitch = 440;
-        for (uint i = 0; i < l; i++) {
-            pitch *= SEMITONE;
-            Note n = Note(0, NoteState.NOTE_STATE_ON,
-                    pitch, &asdf);
-            add_event(ctx, &n, sample_rate * (2 * i) / 32);
-            n.state = NoteState.NOTE_STATE_OFF;
-            add_event(ctx, &n,
-                    sample_rate * (2 * i + 1) / 32);
-        }
+        key_progs[i] = [
+            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
+            make_e!BCItem(2 * PI),
+            make_e!BCItem(BCOp.BCOP_PUSH_T),
+            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
+            make_e!BCItem(pitch),
+            make_e!BCItem(BCOp.BCOP_MUL),
+            make_e!BCItem(BCOp.BCOP_MUL),
+            make_e!BCItem(BCOp.BCOP_SIN),
+        ];
+
+        key_notes[i] = Note(0, NoteState.NOTE_STATE_OFF,
+                key_progs[i].ptr, key_progs[i].length);
     }
 
     enum midi_queue_size = 4096;
