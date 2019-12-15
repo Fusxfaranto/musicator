@@ -41,39 +41,86 @@ ATOMIC_INC_MOD_FUNC(uint_fast32_t);
 #define BC_STACK_SIZE 1024
 typedef double BCStack[BC_STACK_SIZE];
 
-double run_bytecode(const BCItem* bc, uint bc_len, uint64_t sample_num, uint sample_rate) {
+typedef struct {
+    BCProg prog;
+    uint ip;
+} BCProgState;
+
+double run_bytecode(
+        const BCProg prog,
+        uint64_t sample_num,
+        uint sample_rate) {
     BCStack stack = {0};
-    int ip = 0;
     int sp = 0;
 
-    while (ip < bc_len) {
-        switch (bc[ip++].op) {
-        case BCOP_PUSH_FLT:
-            stack[sp++] = bc[ip++].flt;
-            break;
+    // TODO size?
+    BCProgState call_stack[64] = {{prog, 0}};
+    int call_sp = 0;
 
-        case BCOP_PUSH_T:
-            stack[sp++] = (double)sample_num / (double)sample_rate;
-            break;
+    do {
+        BCProg cur_prog;
+        uint* ip;
+    loop_begin:
+        cur_prog = call_stack[call_sp].prog;
+        ip = &call_stack[call_sp].ip;
 
-        case BCOP_ADD:
-            sp--;
-            assert(sp > 0);
-            stack[sp - 1] = stack[sp - 1] + stack[sp];
-            break;
+        while (*ip < cur_prog.bc_len) {
+            switch (cur_prog.bc[(*ip)++].op) {
+            case BCOP_CALL:
+                call_stack[++call_sp] = (BCProgState){
+                        *cur_prog.bc[(*ip)++].prog, 0};
+                goto loop_begin;
 
-        case BCOP_MUL:
-            sp--;
-            assert(sp > 0);
-            stack[sp - 1] = stack[sp - 1] * stack[sp];
-            break;
+            case BCOP_COPY:
+                assert(sp > 0);
+                stack[sp] = stack[sp - 1];
+                sp++;
+                break;
 
-        case BCOP_SIN:
-            assert(sp > 0);
-            stack[sp - 1] = sin(stack[sp - 1]);
-            break;
+            case BCOP_POP:
+                sp--;
+                assert(sp > 0);
+                break;
+
+            case BCOP_SWAP:
+                assert(sp >= 2);
+                {
+                    double t = stack[sp - 1];
+                    stack[sp - 1] = stack[sp - 2];
+                    stack[sp - 2] = t;
+                }
+                break;
+
+            case BCOP_PUSH_FLT:
+                stack[sp++] = cur_prog.bc[(*ip)++].flt;
+                break;
+
+            case BCOP_PUSH_T:
+                stack[sp++] = (double)sample_num /
+                              (double)sample_rate;
+                break;
+
+            case BCOP_ADD:
+                sp--;
+                assert(sp > 0);
+                stack[sp - 1] = stack[sp - 1] + stack[sp];
+                break;
+
+            case BCOP_MUL:
+                sp--;
+                assert(sp > 0);
+                stack[sp - 1] = stack[sp - 1] * stack[sp];
+                break;
+
+            case BCOP_SIN:
+                assert(sp > 0);
+                stack[sp - 1] = sin(stack[sp - 1]);
+                break;
+            }
         }
-    }
+
+        call_sp--;
+    } while (call_sp >= 0);
 
     assert(sp == 1);
     return stack[--sp];
@@ -96,7 +143,7 @@ typedef struct {
     Event* event_buf;
     atomic_bool* event_ready;
     uint event_buf_size;
-    atomic_uint_fast32_t event_pos;
+    uint event_pos;
     atomic_uint_fast32_t event_reserved_pos;
 } StreamPriv;
 
@@ -146,61 +193,46 @@ static inline double overtones(
         uint len,
         uint sample_rate) {
     double r = 0;
-    for (int i = 0; i < len; i++) {
-        r += as[i] * tone(t, freq * (i + 1), sample_rate);
+    for (uint i = 0; i < len; i++) {
+        r += as[i] *
+             tone(t, freq * (double)(i + 1), sample_rate);
     }
     return r;
 }
 
-static long data_cb(
-        cubeb_stream* stm,
-        void* user,
-        const void* in_s,
-        void* out_s,
-        long n_signed) {
-    StreamPriv* p = user;
-
-    float* out = out_s;
-    uint64_t n = (uint64_t)n_signed;
+static uint process_events(StreamPriv* p, uint64_t n) {
+    uint next_n;
     uint64_t end = p->c + n;
 
-    // TODO check that events are actually ready instead of
-    // just blasting off into uninitialized memory?
     for (;;) {
-        // TODO is atomic_load necessary here?
-        uint event_idx = atomic_load(&p->event_pos);
-        if (!atomic_load(&p->event_ready[event_idx])) {
-            printf("current event not ready\n");
-            for (uint i = 0; i < n; i++) {
-                for (uint c = 0; c < 2; c++) {
-                    out[2 * i + c] = 0;
-                }
-            }
-            return n_signed;
+        if (!atomic_load(&p->event_ready[p->event_pos])) {
+            return n;
         }
 
-        uint next_event_idx =
-                (event_idx + 1) % p->event_buf_size;
-
-        Event* e = &p->event_buf[next_event_idx];
-        uint64_t next_n;
-        if (atomic_load(&p->event_ready[next_event_idx])) {
-            uint64_t next_c = e->at_count;
-            if (next_c < p->c) {
-                next_c = p->c;
-            }
-            if (next_c < end) {
-                next_n = next_c - p->c;
-            } else {
-                next_n = end - p->c;
-            }
+        Event* e = &p->event_buf[p->event_pos];
+        uint64_t next_c = e->at_count;
+        if (next_c < p->c) {
+            // event "in the past" (process it now)
+            next_c = p->c;
+        }
+        if (next_c < end) {
+            // event will need processing
+            next_n = next_c - p->c;
         } else {
+            // event not needed this call
             next_n = end - p->c;
         }
 
+        if (next_n != 0) {
+            // event doesn't need processing yet
+            return next_n;
+        }
+
+        printf("processing event %lu\n", p->event_pos);
+
         uint note_buf_idx = (uint)-1;
-        // TODO something faster if we're not updating an
-        // existing note?
+        // TODO something faster if we're not updating
+        // an existing note?
         for (uint i = 0; i < p->note_buf_size; i++) {
             if (p->note_buf[i].id == e->note.id) {
                 note_buf_idx = i;
@@ -221,6 +253,32 @@ static long data_cb(
 
         p->note_buf[note_buf_idx] = e->note;
 
+        atomic_store(&p->event_ready[p->event_pos], false);
+
+        p->event_pos = (p->event_pos + 1) % p->event_buf_size;
+    }
+}
+
+static long data_cb(
+        cubeb_stream* stm,
+        void* user,
+        const void* in_s,
+        void* out_s,
+        long n_signed) {
+    (void)stm;
+    (void)in_s;
+
+    StreamPriv* p = user;
+
+    float* out = out_s;
+    uint64_t n = (uint64_t)n_signed;
+    uint64_t end = p->c + n;
+
+    for (;;) {
+        // num samples to calculate until processing next
+        // event
+        uint64_t next_n = process_events(p, n);
+
         for (uint i = 0; i < next_n; i++) {
             double r = 0;
 
@@ -234,13 +292,17 @@ static long data_cb(
                 case NOTE_STATE_ON:
                     /* r += overtones( */
                     /*         i + p->c, */
-                    /*         p->note_buf[note_idx].pitch, */
+                    /*         p->note_buf[note_idx].pitch,
+                     */
                     /*         p->note_buf[note_idx] */
                     /*                 .instr->ot_amps, */
                     /*         p->note_buf[note_idx] */
                     /*                 .instr->ot_num, */
                     /*         p->sample_rate); */
-                    r += run_bytecode(p->note_buf[note_idx].bc, p->note_buf[note_idx].bc_len, i + p->c, p->sample_rate);
+                    r += run_bytecode(
+                            p->note_buf[note_idx].prog,
+                            i + p->c,
+                            p->sample_rate);
                     break;
                 }
             }
@@ -258,14 +320,6 @@ static long data_cb(
             break;
         }
         assert(p->c < end);
-
-        atomic_store(&p->event_ready[event_idx], false);
-
-        // event_pos should only be modified here and
-        // nowhere else
-        // TODO use an explicit memory order in that case?
-        atomic_store(&p->event_pos, next_event_idx);
-        // printf("processing event %lu\n", next_event_idx);
     }
 
     p->c = end;
@@ -274,6 +328,9 @@ static long data_cb(
 
 static void
 state_cb(cubeb_stream* stm, void* user, cubeb_state state) {
+    (void)stm;
+    (void)user;
+    (void)state;
 }
 
 static void init_stream_priv(

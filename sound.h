@@ -7,9 +7,12 @@ typedef uint_fast32_t uint;
 typedef _Bool bool;
 
 #define PI 3.14159265358979323846
-#define SEMITONE 1.0594630943592952646
 
 typedef enum {
+    BCOP_CALL,
+    BCOP_COPY,
+    BCOP_POP,
+    BCOP_SWAP,
     BCOP_PUSH_FLT,
     BCOP_PUSH_T,
     BCOP_ADD,
@@ -17,12 +20,20 @@ typedef enum {
     BCOP_SIN,
 } BCOp;
 
+typedef struct BCProg BCProg;
+
 typedef struct {
     union {
         BCOp op;
         double flt;
+        BCProg* prog;
     };
 } BCItem;
+
+struct BCProg {
+    size_t bc_len;
+    BCItem* bc;
+};
 
 typedef enum {
     NOTE_STATE_OFF,
@@ -33,8 +44,7 @@ typedef struct {
     uint id;
     NoteState state;
 
-    BCItem* bc;
-    uint bc_len;
+    BCProg prog;
 } Note;
 
 typedef struct AudioContext AudioContext;

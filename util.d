@@ -13,3 +13,7 @@ T make_e(T, S)(S val) {
         }
     }
 }
+
+T reinterpret(T, U)(auto ref U u) if (T.sizeof == U.sizeof) {
+    return *cast(T*)(&u);
+}
