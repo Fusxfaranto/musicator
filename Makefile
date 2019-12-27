@@ -23,7 +23,7 @@ CFLAGS += -Icubeb/include/ -Icubeb/build/exports/
 #CLDFLAGS += -Lcubeb/build/ -llibcubeb
 CSTATIC_LIBS := cubeb/build/libcubeb.a
 
-DFLAGS := -m64 -g -c -O
+DFLAGS := -m64 -g -c -O0
 #DFLAGS += -d-debug=prof
 DFLAGS += # -debug=prof # -profile=gc
 #LDFLAGS := -Llib -lm -lSOIL -lGLEW -lglfw -lGL

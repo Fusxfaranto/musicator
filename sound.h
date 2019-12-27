@@ -8,32 +8,15 @@ typedef _Bool bool;
 
 #define PI 3.14159265358979323846
 
-typedef enum {
-    BCOP_CALL,
-    BCOP_COPY,
-    BCOP_POP,
-    BCOP_SWAP,
-    BCOP_PUSH_FLT,
-    BCOP_PUSH_T,
-    BCOP_ADD,
-    BCOP_MUL,
-    BCOP_SIN,
-} BCOp;
-
-typedef struct BCProg BCProg;
-
 typedef struct {
-    union {
-        BCOp op;
-        double flt;
-        BCProg* prog;
-    };
-} BCItem;
+    uint64_t t;
+    uint sample_rate;
+} NoteInput;
 
-struct BCProg {
-    size_t bc_len;
-    BCItem* bc;
-};
+// TODO i should probably provide some synchronization
+// around priv
+typedef double (
+        *NoteFn)(const NoteInput*, void* /* priv */);
 
 typedef enum {
     NOTE_STATE_OFF,
@@ -44,7 +27,8 @@ typedef struct {
     uint id;
     NoteState state;
 
-    BCProg prog;
+    NoteFn fn;
+    void* priv;
 } Note;
 
 typedef struct AudioContext AudioContext;

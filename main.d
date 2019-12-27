@@ -1,6 +1,6 @@
 import std.datetime : dur;
 import std.exception : enforce;
-import std.math : exp2, log2, PI, pow, round;
+import std.math : exp2, sin, log2, PI, pow, round;
 import std.process : executeShell;
 import std.stdio : writeln, writefln;
 
@@ -20,11 +20,110 @@ import rtmidi_c;
 //             message[0 .. message_size]);
 // }
 
+struct TestNoteData {
+    int key_code;
+    double volume;
+}
+
 AudioContext* ctx;
 Note[128] key_notes;
-BCItem[][128] key_progs;
+TestNoteData[128] key_data;
 bool[128] key_held = false;
 bool midi_suspend = false;
+
+double tone(ulong t, double freq, ulong sample_rate) {
+    return sin(2 * PI * cast(double)(
+            t) * freq / cast(double)sample_rate);
+}
+
+extern (C) double test_note(
+        const NoteInput* note_input, void* priv) {
+    auto d = cast(TestNoteData*)priv;
+
+    static if (false) {
+        enum cents = 100;
+        double pitch = 440 * pow(2,
+                (d.key_code - 69) * (cents / 1200.));
+    }
+    else static if (false) {
+        //enum cents = 77.965;
+        enum cents = 63.16;
+        double pitch = white_keys_map[i] == -1 ? 0 : 440
+            * pow(2, (white_keys_map[i] - 50) * (
+                    cents / 1200));
+    }
+    else static if (true) {
+        enum cents = 63.16;
+        //enum cents = 77.965;
+        //enum cents = 12.5;
+
+        double base_pitch = 440 * exp2((d.key_code - 69) / 12.);
+        int closest_key = 69 + cast(int)(
+                round(log2(base_pitch / 440) * 1200. / cents));
+
+        double pitch = 440 * exp2(
+                (closest_key - 69) * (cents / 1200.));
+    }
+    else {
+        enum double C = 440 * pow(2, (72 - 69) / 12.0);
+        int rel_note = (d.key_code + (128 * 12) - 72) % 12;
+        int octave = (d.key_code - rel_note) / 12;
+        double octave_scale = pow(2, octave - 6.0);
+        double[12] intervals;
+        if (true) {
+            intervals[0] = 1.0;
+            intervals[1] = 16.0 / 15.0;
+            intervals[2] = 9.0 / 8.0;
+            intervals[3] = 6.0 / 5.0;
+            intervals[4] = 5.0 / 4.0;
+            intervals[5] = 4.0 / 3.0;
+            intervals[6] = 25.0 / 18.0;
+            intervals[7] = 3.0 / 2.0;
+            intervals[8] = 8.0 / 5.0;
+            intervals[9] = 5.0 / 3.0;
+            intervals[10] = 9.0 / 5.0;
+            intervals[11] = 15.0 / 8.0;
+        }
+        else {
+            intervals[0] = 1.0;
+            intervals[1] = 14.0 / 13.0;
+            intervals[2] = 8.0 / 7.0;
+            intervals[3] = 6.0 / 5.0;
+            intervals[4] = 5.0 / 4.0;
+            intervals[5] = 4.0 / 3.0;
+            intervals[6] = 7.0 / 5.0;
+            intervals[7] = 3.0 / 2.0;
+            intervals[8] = 8.0 / 5.0;
+            intervals[9] = 5.0 / 3.0;
+            intervals[10] = 7.0 / 4.0;
+            intervals[11] = 13.0 / 7.0;
+
+        }
+        double pitch = octave_scale * C
+            * intervals[rel_note];
+    }
+
+    if (pitch == 0) {
+        return 0;
+    }
+
+    static if (false) {
+        static double[] ots = [
+            1.0, 1.0, 0.5, 0.5, 0.4, 0.3,
+            0.2, 0.2, 0.1, 0.1, 0.1,
+        ];
+
+        double r = 0;
+        for (uint i = 0; i < ots.length; i++) {
+            r += ots[i] * tone(note_input.t,
+                    pitch * cast(double)(i + 1),
+                    note_input.sample_rate);
+        }
+        return r / ots.length;
+    } else {
+        return tone(note_input.t, pitch, note_input.sample_rate);
+    }
+}
 
 void handle_midi_message(const ubyte[] message) {
     if (message.length > 0) {
@@ -41,9 +140,8 @@ void handle_midi_message(const ubyte[] message) {
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
                     if (key_held[midi_note]) {
-                        // TODO awful, also probably super racy
-                        key_progs[midi_note][1] = make_e!BCItem(
-                                midi_velocity / 128.);
+                        key_data[midi_note].volume
+                            = midi_velocity / 128.;
                         key_notes[midi_note].state
                             = NoteState.NOTE_STATE_ON;
                     }
@@ -118,158 +216,15 @@ void main() {
         }
     }
 
+    for (int i = 0; i < 128; i++) {
+        key_data[i] = TestNoteData(i, double.nan);
+        key_notes[i] = Note(0, NoteState.NOTE_STATE_OFF,
+                &test_note, &key_data[i]);
+    }
+
     enforce(start_audio(&ctx) == 0);
     scope (exit)
         enforce(stop_audio(ctx) == 0);
-
-    auto sample_rate = get_sample_rate(ctx);
-
-    auto silent_prog = reinterpret!BCProg(
-            [
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(1.0),
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(0.0),
-            make_e!BCItem(BCOp.BCOP_MUL),
-            ]);
-
-    auto note_prog = reinterpret!BCProg(
-            [
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(2 * PI),
-            make_e!BCItem(BCOp.BCOP_PUSH_T),
-            make_e!BCItem(BCOp.BCOP_MUL),
-            make_e!BCItem(BCOp.BCOP_MUL),
-            make_e!BCItem(BCOp.BCOP_SIN),
-            ]);
-
-    BCProg ot_prog = void;
-    {
-        static double[] asdf_ots = [
-            1.0, 1.0, 0.5, 0.5, 0.4, 0.3,
-            0.2, 0.2, 0.1, 0.1, 0.1,
-        ];
-
-        BCItem[] ot_prog_a;
-
-        double tot = 0;
-        foreach (i, a; asdf_ots) {
-            tot += a;
-            ot_prog_a ~= [
-                make_e!BCItem(BCOp.BCOP_COPY),
-                make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-                make_e!BCItem(i + 1.0),
-                make_e!BCItem(BCOp.BCOP_MUL),
-                make_e!BCItem(BCOp.BCOP_CALL),
-                make_e!BCItem(&note_prog),
-                make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-                make_e!BCItem(a),
-                make_e!BCItem(BCOp.BCOP_MUL),
-                make_e!BCItem(BCOp.BCOP_SWAP),
-            ];
-        }
-
-        ot_prog_a ~= make_e!BCItem(BCOp.BCOP_POP);
-
-        for (int i = 0; i < asdf_ots.length - 1;
-                i++) {
-            ot_prog_a ~= make_e!BCItem(BCOp.BCOP_ADD);
-        }
-
-        ot_prog_a ~= [
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(1 / tot),
-            make_e!BCItem(BCOp.BCOP_MUL),
-        ];
-
-        ot_prog = reinterpret!BCProg(ot_prog_a);
-    }
-
-    for (int i = 0; i < 128; i++) {
-        static if (false) {
-            enum cents = 100;
-            double pitch = 440 * pow(2,
-                    (i - 69) * (cents / 1200.));
-        }
-        else static if (false) {
-            //enum cents = 77.965;
-            enum cents = 63.16;
-            double pitch = white_keys_map[i] == -1 ? 0
-                : 440 * pow(2,
-                        (white_keys_map[i] - 50) * (
-                            cents / 1200));
-        }
-        else static if (true) {
-            enum cents = 63.16;
-            //enum cents = 77.965;
-            //enum cents = 12.5;
-
-            double base_pitch = 440 * exp2((i - 69) / 12.);
-            int closest_key = 69 + cast(int)(
-                    round(log2(base_pitch / 440) * 1200. / cents));
-
-            double pitch = 440 * exp2(
-                    (closest_key - 69) * (cents / 1200.));
-        }
-        else {
-            enum double C = 440 * pow(2, (72 - 69) / 12.0);
-            int rel_note = (i + (128 * 12) - 72) % 12;
-            int octave = (i - rel_note) / 12;
-            double octave_scale = pow(2, octave - 6.0);
-            double[12] intervals;
-            if (true) {
-                intervals[0] = 1.0;
-                intervals[1] = 16.0 / 15.0;
-                intervals[2] = 9.0 / 8.0;
-                intervals[3] = 6.0 / 5.0;
-                intervals[4] = 5.0 / 4.0;
-                intervals[5] = 4.0 / 3.0;
-                intervals[6] = 25.0 / 18.0;
-                intervals[7] = 3.0 / 2.0;
-                intervals[8] = 8.0 / 5.0;
-                intervals[9] = 5.0 / 3.0;
-                intervals[10] = 9.0 / 5.0;
-                intervals[11] = 15.0 / 8.0;
-            }
-            else {
-                intervals[0] = 1.0;
-                intervals[1] = 14.0 / 13.0;
-                intervals[2] = 8.0 / 7.0;
-                intervals[3] = 6.0 / 5.0;
-                intervals[4] = 5.0 / 4.0;
-                intervals[5] = 4.0 / 3.0;
-                intervals[6] = 7.0 / 5.0;
-                intervals[7] = 3.0 / 2.0;
-                intervals[8] = 8.0 / 5.0;
-                intervals[9] = 5.0 / 3.0;
-                intervals[10] = 7.0 / 4.0;
-                intervals[11] = 13.0 / 7.0;
-
-            }
-            double pitch = octave_scale
-                * C * intervals[rel_note];
-        }
-
-        key_progs[i] = [
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(1.0),
-            make_e!BCItem(BCOp.BCOP_PUSH_FLT),
-            make_e!BCItem(pitch),
-            make_e!BCItem(BCOp.BCOP_CALL),
-            make_e!BCItem(&ot_prog),
-            make_e!BCItem(BCOp.BCOP_MUL),
-        ];
-
-        if (pitch != 0) {
-            key_notes[i] = Note(0,
-                    NoteState.NOTE_STATE_OFF,
-                    reinterpret!BCProg(key_progs[i]));
-        }
-        else {
-            key_notes[i] = Note(0,
-                    NoteState.NOTE_STATE_OFF, silent_prog);
-        }
-    }
 
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(

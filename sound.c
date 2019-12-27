@@ -38,94 +38,6 @@ ATOMIC_INC_MOD_FUNC(uint_fast32_t);
 // TODO _Generic?
 #define atomic_inc_mod atomic_inc_mod_uint_fast32_t
 
-#define BC_STACK_SIZE 1024
-typedef double BCStack[BC_STACK_SIZE];
-
-typedef struct {
-    BCProg prog;
-    uint ip;
-} BCProgState;
-
-double run_bytecode(
-        const BCProg prog,
-        uint64_t sample_num,
-        uint sample_rate) {
-    BCStack stack = {0};
-    int sp = 0;
-
-    // TODO size?
-    BCProgState call_stack[64] = {{prog, 0}};
-    int call_sp = 0;
-
-    do {
-        BCProg cur_prog;
-        uint* ip;
-    loop_begin:
-        cur_prog = call_stack[call_sp].prog;
-        ip = &call_stack[call_sp].ip;
-
-        while (*ip < cur_prog.bc_len) {
-            switch (cur_prog.bc[(*ip)++].op) {
-            case BCOP_CALL:
-                call_stack[++call_sp] = (BCProgState){
-                        *cur_prog.bc[(*ip)++].prog, 0};
-                goto loop_begin;
-
-            case BCOP_COPY:
-                assert(sp > 0);
-                stack[sp] = stack[sp - 1];
-                sp++;
-                break;
-
-            case BCOP_POP:
-                sp--;
-                assert(sp > 0);
-                break;
-
-            case BCOP_SWAP:
-                assert(sp >= 2);
-                {
-                    double t = stack[sp - 1];
-                    stack[sp - 1] = stack[sp - 2];
-                    stack[sp - 2] = t;
-                }
-                break;
-
-            case BCOP_PUSH_FLT:
-                stack[sp++] = cur_prog.bc[(*ip)++].flt;
-                break;
-
-            case BCOP_PUSH_T:
-                stack[sp++] = (double)sample_num /
-                              (double)sample_rate;
-                break;
-
-            case BCOP_ADD:
-                sp--;
-                assert(sp > 0);
-                stack[sp - 1] = stack[sp - 1] + stack[sp];
-                break;
-
-            case BCOP_MUL:
-                sp--;
-                assert(sp > 0);
-                stack[sp - 1] = stack[sp - 1] * stack[sp];
-                break;
-
-            case BCOP_SIN:
-                assert(sp > 0);
-                stack[sp - 1] = sin(stack[sp - 1]);
-                break;
-            }
-        }
-
-        call_sp--;
-    } while (call_sp >= 0);
-
-    assert(sp == 1);
-    return stack[--sp];
-}
-
 typedef struct {
     uint64_t at_count;
     Note note;
@@ -177,27 +89,6 @@ void add_event(
 
     assert(!atomic_load(&p->event_ready[event_idx]));
     atomic_store(&p->event_ready[event_idx], true);
-}
-
-static inline double
-tone(uint t, double freq, uint sample_rate) {
-    return sin(
-            2 * PI * (double)(t)*freq /
-            (double)sample_rate);
-}
-
-static inline double overtones(
-        uint t,
-        double freq,
-        const double* as,
-        uint len,
-        uint sample_rate) {
-    double r = 0;
-    for (uint i = 0; i < len; i++) {
-        r += as[i] *
-             tone(t, freq * (double)(i + 1), sample_rate);
-    }
-    return r;
 }
 
 static uint process_events(StreamPriv* p, uint64_t n) {
@@ -255,7 +146,8 @@ static uint process_events(StreamPriv* p, uint64_t n) {
 
         atomic_store(&p->event_ready[p->event_pos], false);
 
-        p->event_pos = (p->event_pos + 1) % p->event_buf_size;
+        p->event_pos =
+                (p->event_pos + 1) % p->event_buf_size;
     }
 }
 
@@ -274,6 +166,12 @@ static long data_cb(
     uint64_t n = (uint64_t)n_signed;
     uint64_t end = p->c + n;
 
+    // TODO make this per note?
+    NoteInput note_input = (NoteInput){
+            .t = p->c,
+            .sample_rate = p->sample_rate,
+    };
+
     for (;;) {
         // num samples to calculate until processing next
         // event
@@ -290,19 +188,9 @@ static long data_cb(
                     break;
 
                 case NOTE_STATE_ON:
-                    /* r += overtones( */
-                    /*         i + p->c, */
-                    /*         p->note_buf[note_idx].pitch,
-                     */
-                    /*         p->note_buf[note_idx] */
-                    /*                 .instr->ot_amps, */
-                    /*         p->note_buf[note_idx] */
-                    /*                 .instr->ot_num, */
-                    /*         p->sample_rate); */
-                    r += run_bytecode(
-                            p->note_buf[note_idx].prog,
-                            i + p->c,
-                            p->sample_rate);
+                    r += p->note_buf[note_idx].fn(
+                            &note_input,
+                            p->note_buf[note_idx].priv);
                     break;
                 }
             }
@@ -311,6 +199,7 @@ static long data_cb(
             for (uint c = 0; c < 2; c++) {
                 out[2 * i + c] = (float)r;
             }
+            note_input.t++;
         }
 
         p->c += next_n;
