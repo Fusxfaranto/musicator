@@ -49,6 +49,7 @@ typedef struct {
     double volume;
 
     Note* note_buf;
+    NoteInput* note_input_buf;
     uint note_buf_size;
     atomic_uint_fast32_t note_next_id;
 
@@ -143,6 +144,9 @@ static uint process_events(StreamPriv* p, uint64_t n) {
         assert(note_buf_idx != (uint)-1);
 
         p->note_buf[note_buf_idx] = e->note;
+        p->note_input_buf[note_buf_idx] = (NoteInput){
+            .t = 0,
+        };
 
         atomic_store(&p->event_ready[p->event_pos], false);
 
@@ -167,8 +171,7 @@ static long data_cb(
     uint64_t end = p->c + n;
 
     // TODO make this per note?
-    NoteInput note_input = (NoteInput){
-            .t = p->c,
+    NoteInputShared note_input_shared = (NoteInputShared){
             .sample_rate = p->sample_rate,
     };
 
@@ -189,17 +192,18 @@ static long data_cb(
 
                 case NOTE_STATE_ON:
                     r += p->note_buf[note_idx].fn(
-                            &note_input,
+                            &p->note_input_buf[note_idx],
+                            &note_input_shared,
                             p->note_buf[note_idx].priv);
                     break;
                 }
+                p->note_input_buf[note_idx].t++;
             }
 
             r *= p->volume;
             for (uint c = 0; c < 2; c++) {
                 out[2 * i + c] = (float)r;
             }
-            note_input.t++;
         }
 
         p->c += next_n;
@@ -233,6 +237,8 @@ static void init_stream_priv(
             .volume = 0.1,
 
             .note_buf = malloc(sizeof(Note) * nbl),
+            .note_input_buf =
+                    malloc(sizeof(NoteInput) * nbl),
             .note_buf_size = nbl,
 
             .event_buf = malloc(sizeof(Event) * ebl),

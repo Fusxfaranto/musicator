@@ -36,8 +36,9 @@ double tone(ulong t, double freq, ulong sample_rate) {
             t) * freq / cast(double)sample_rate);
 }
 
-extern (C) double test_note(
-        const NoteInput* note_input, void* priv) {
+extern (C) double test_note(const NoteInput* note_input,
+        const NoteInputShared* note_input_shared,
+        void* priv) {
     auto d = cast(TestNoteData*)priv;
 
     static if (false) {
@@ -57,7 +58,8 @@ extern (C) double test_note(
         //enum cents = 77.965;
         //enum cents = 12.5;
 
-        double base_pitch = 440 * exp2((d.key_code - 69) / 12.);
+        double base_pitch = 440 * exp2(
+                (d.key_code - 69) / 12.);
         int closest_key = 69 + cast(int)(
                 round(log2(base_pitch / 440) * 1200. / cents));
 
@@ -117,11 +119,13 @@ extern (C) double test_note(
         for (uint i = 0; i < ots.length; i++) {
             r += ots[i] * tone(note_input.t,
                     pitch * cast(double)(i + 1),
-                    note_input.sample_rate);
+                    note_input_shared.sample_rate);
         }
         return r / ots.length;
-    } else {
-        return tone(note_input.t, pitch, note_input.sample_rate);
+    }
+    else {
+        return tone(note_input.t, pitch,
+                note_input_shared.sample_rate);
     }
 }
 

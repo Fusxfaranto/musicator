@@ -9,14 +9,19 @@ typedef _Bool bool;
 #define PI 3.14159265358979323846
 
 typedef struct {
-    uint64_t t;
-    uint sample_rate;
+    uint t;
 } NoteInput;
+
+typedef struct {
+    uint sample_rate;
+} NoteInputShared;
 
 // TODO i should probably provide some synchronization
 // around priv
-typedef double (
-        *NoteFn)(const NoteInput*, void* /* priv */);
+typedef double (*NoteFn)(
+        const NoteInput*,
+        const NoteInputShared*,
+        void* /* priv */);
 
 typedef enum {
     NOTE_STATE_OFF,
