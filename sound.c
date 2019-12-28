@@ -76,6 +76,9 @@ void add_event(
         uint64_t at_count) {
     StreamPriv* p = &ctx->priv;
 
+    assert(note);
+    assert(note->fn);
+
     if (note->id == 0) {
         note->id = atomic_fetch_add(&p->note_next_id, 1);
         assert(atomic_load(&p->note_next_id) != 0);
@@ -133,8 +136,7 @@ static uint process_events(StreamPriv* p, uint64_t n) {
         }
         if (note_buf_idx == (uint)-1) {
             for (uint i = 0; i < p->note_buf_size; i++) {
-                if (p->note_buf[i].state ==
-                    NOTE_STATE_OFF) {
+                if (p->note_buf[i].fn == NULL) {
                     note_buf_idx = i;
                     break;
                 }
@@ -143,10 +145,14 @@ static uint process_events(StreamPriv* p, uint64_t n) {
         // TODO handle out-of-space
         assert(note_buf_idx != (uint)-1);
 
+        // TODO do we want this?
+        //if (p->note_buf[note_buf_idx].fn == NULL) {
+        if (true) {
+            p->note_input_buf[note_buf_idx] = (NoteInput){
+                    .t = 0,
+            };
+        }
         p->note_buf[note_buf_idx] = e->note;
-        p->note_input_buf[note_buf_idx] = (NoteInput){
-            .t = 0,
-        };
 
         atomic_store(&p->event_ready[p->event_pos], false);
 
@@ -172,6 +178,7 @@ static long data_cb(
 
     // TODO make this per note?
     NoteInputShared note_input_shared = (NoteInputShared){
+            .t = p->c,
             .sample_rate = p->sample_rate,
     };
 
@@ -186,24 +193,37 @@ static long data_cb(
             for (uint note_idx = 0;
                  note_idx < p->note_buf_size;
                  note_idx++) {
-                switch (p->note_buf[note_idx].state) {
-                case NOTE_STATE_OFF:
-                    break;
-
-                case NOTE_STATE_ON:
+                if (p->note_buf[note_idx].fn) {
                     r += p->note_buf[note_idx].fn(
                             &p->note_input_buf[note_idx],
                             &note_input_shared,
+                            p->note_buf[note_idx].expire,
                             p->note_buf[note_idx].priv);
-                    break;
+                    p->note_input_buf[note_idx].t++;
+                    p->note_buf[note_idx].expire--;
+
+                    // TODO better place to do this?
+                    if (p->note_buf[note_idx].expire <= 0) {
+                        if (p->note_buf[note_idx].expire <
+                            EXPIRE_INDEFINITE) {
+                            p->note_buf[note_idx].expire =
+                                    EXPIRE_INDEFINITE;
+                        } else {
+                            p->note_buf[note_idx] =
+                                    EMPTY_NOTE;
+                        }
+                    }
                 }
-                p->note_input_buf[note_idx].t++;
             }
 
             r *= p->volume;
+
+            // TODO stereo
             for (uint c = 0; c < 2; c++) {
                 out[2 * i + c] = (float)r;
             }
+
+            note_input_shared.t++;
         }
 
         p->c += next_n;
@@ -247,10 +267,7 @@ static void init_stream_priv(
     };
 
     for (uint i = 0; i < nbl; i++) {
-        p->note_buf[i] = (Note){
-                .id = 0,
-                .state = NOTE_STATE_OFF,
-        };
+        p->note_buf[i] = EMPTY_NOTE;
     }
 
     atomic_store(&p->note_next_id, 1);

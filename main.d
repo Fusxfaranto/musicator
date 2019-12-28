@@ -1,6 +1,7 @@
+import std.algorithm : max;
 import std.datetime : dur;
 import std.exception : enforce;
-import std.math : exp2, sin, log2, PI, pow, round;
+import std.math : exp2, log2, PI, pow, round, _sin = sin;
 import std.process : executeShell;
 import std.stdio : writeln, writefln;
 
@@ -12,6 +13,11 @@ import util;
 import c_bindings;
 
 import rtmidi_c;
+
+alias fast_float_type = float;
+fast_float_type sin(fast_float_type f) {
+    return _sin(f);
+}
 
 // extern (C) void midi_callback(double deltatime,
 //         const(ubyte)* message,
@@ -31,6 +37,8 @@ TestNoteData[128] key_data;
 bool[128] key_held = false;
 bool midi_suspend = false;
 
+uint sample_rate;
+
 double tone(ulong t, double freq, ulong sample_rate) {
     return sin(2 * PI * cast(double)(
             t) * freq / cast(double)sample_rate);
@@ -38,22 +46,21 @@ double tone(ulong t, double freq, ulong sample_rate) {
 
 extern (C) double test_note(const NoteInput* note_input,
         const NoteInputShared* note_input_shared,
-        void* priv) {
+        int expire, const void* priv) {
     auto d = cast(TestNoteData*)priv;
 
-    static if (false) {
+    static if (true) {
         enum cents = 100;
-        double pitch = 440 * pow(2,
+        double pitch = 440 * exp2(
                 (d.key_code - 69) * (cents / 1200.));
     }
     else static if (false) {
         //enum cents = 77.965;
         enum cents = 63.16;
         double pitch = white_keys_map[i] == -1 ? 0 : 440
-            * pow(2, (white_keys_map[i] - 50) * (
-                    cents / 1200));
+            * exp2((white_keys_map[i] - 50) * (cents / 1200));
     }
-    else static if (true) {
+    else static if (false) {
         enum cents = 63.16;
         //enum cents = 77.965;
         //enum cents = 12.5;
@@ -67,10 +74,10 @@ extern (C) double test_note(const NoteInput* note_input,
                 (closest_key - 69) * (cents / 1200.));
     }
     else {
-        enum double C = 440 * pow(2, (72 - 69) / 12.0);
+        enum double C = 440 * exp2((72 - 69) / 12.0);
         int rel_note = (d.key_code + (128 * 12) - 72) % 12;
         int octave = (d.key_code - rel_note) / 12;
-        double octave_scale = pow(2, octave - 6.0);
+        double octave_scale = exp2(octave - 6.0);
         double[12] intervals;
         if (true) {
             intervals[0] = 1.0;
@@ -109,24 +116,54 @@ extern (C) double test_note(const NoteInput* note_input,
         return 0;
     }
 
-    static if (false) {
-        static double[] ots = [
-            1.0, 1.0, 0.5, 0.5, 0.4, 0.3,
+    static if (true) {
+        static __gshared double[] ots = [
+            1.0, 1.0, 0.5, 0.6, 0.4, 0.3,
             0.2, 0.2, 0.1, 0.1, 0.1,
         ];
+        // static __gshared double[] ots = [
+        //     1.0, 0.5, 0.3
+        // ];
 
+        double s = 0;
         double r = 0;
         for (uint i = 0; i < ots.length; i++) {
-            r += ots[i] * tone(note_input.t,
+            s += ots[i];
+            r += ots[i] * tone(note_input_shared.t,
                     pitch * cast(double)(i + 1),
                     note_input_shared.sample_rate);
         }
-        return r / ots.length;
+        r /= s;
     }
     else {
-        return tone(note_input.t, pitch,
+        double r = tone(note_input_shared.t, pitch,
                 note_input_shared.sample_rate);
     }
+
+    // TODO try a fancier envelope
+    enum A = 0.01;
+    enum D = 0.08;
+    enum S = 0.35;
+    enum R = 0.2;
+
+    double t = note_input.t / cast(
+            double)note_input_shared.sample_rate;
+    if (expire <= EXPIRE_INDEFINITE) {
+        if (t <= A) {
+            r *= t / A;
+        }
+        else if (t <= D + A) {
+            r *= ((S - 1) / D) * (t - A) + 1;
+        }
+        else {
+            r *= S;
+        }
+    }
+    else {
+        r *= max(-(S / R) * t + S, 0);
+    }
+
+    return r;
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -146,12 +183,13 @@ void handle_midi_message(const ubyte[] message) {
                     if (key_held[midi_note]) {
                         key_data[midi_note].volume
                             = midi_velocity / 128.;
-                        key_notes[midi_note].state
-                            = NoteState.NOTE_STATE_ON;
+                        key_notes[midi_note].expire
+                            = EXPIRE_INDEFINITE;
                     }
                     else {
-                        key_notes[midi_note].state
-                            = NoteState.NOTE_STATE_OFF;
+                        // TODO
+                        key_notes[midi_note].expire
+                            = sample_rate / 2;
                     }
                     add_event(ctx,
                             &key_notes[midi_note], 0);
@@ -173,12 +211,10 @@ void handle_midi_message(const ubyte[] message) {
                         for (int i = 0; i < 128;
                                 i++) {
                             if (!key_held[i]
-                                    && key_notes[i].state
-                                    == NoteState
-                                    .NOTE_STATE_ON) {
-                                key_notes[i].state
-                                    = NoteState
-                                    .NOTE_STATE_OFF;
+                                    && key_notes[i].expire
+                                    <= EXPIRE_INDEFINITE) {
+                                key_notes[i].expire
+                                    = sample_rate / 2;
                                 add_event(ctx,
                                         &key_notes[i], 0);
                             }
@@ -222,13 +258,15 @@ void main() {
 
     for (int i = 0; i < 128; i++) {
         key_data[i] = TestNoteData(i, double.nan);
-        key_notes[i] = Note(0, NoteState.NOTE_STATE_OFF,
+        key_notes[i] = Note(0, 0,
                 &test_note, &key_data[i]);
     }
 
     enforce(start_audio(&ctx) == 0);
     scope (exit)
         enforce(stop_audio(ctx) == 0);
+
+    sample_rate = cast(uint)get_sample_rate(ctx);
 
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(

@@ -13,6 +13,7 @@ typedef struct {
 } NoteInput;
 
 typedef struct {
+    uint t;
     uint sample_rate;
 } NoteInputShared;
 
@@ -21,20 +22,22 @@ typedef struct {
 typedef double (*NoteFn)(
         const NoteInput*,
         const NoteInputShared*,
-        void* /* priv */);
-
-typedef enum {
-    NOTE_STATE_OFF,
-    NOTE_STATE_ON,
-} NoteState;
+        int expire,
+        const void* /* priv */);
 
 typedef struct {
     uint id;
-    NoteState state;
+    int expire;
 
     NoteFn fn;
     void* priv;
 } Note;
+
+// if expire is <= this, note does not expire
+const int EXPIRE_INDEFINITE = -268435455;
+
+#define EMPTY_NOTE \
+    (Note) { .id = 0, .fn = NULL }
 
 typedef struct AudioContext AudioContext;
 
