@@ -66,6 +66,11 @@ typedef struct AudioContext {
     cubeb* ctx;
 } AudioContext;
 
+double low_pass_filter(double last_sample, double current_sample, double rc, uint sample_rate) {
+    double alpha = 1 / (rc * (double)sample_rate + 1);
+    return last_sample + alpha * (current_sample - last_sample);
+}
+
 uint get_sample_rate(AudioContext* ctx) {
     return ctx->priv.sample_rate;
 }

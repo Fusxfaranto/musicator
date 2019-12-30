@@ -23,7 +23,7 @@ typedef double (*NoteFn)(
         const NoteInput*,
         const NoteInputShared*,
         int expire,
-        const void* /* priv */);
+        void* /* priv */);
 
 typedef struct {
     uint id;
@@ -43,6 +43,8 @@ typedef struct AudioContext AudioContext;
 
 uint get_sample_rate(AudioContext* ctx);
 
+// TODO add some way to update priv simultaneously with an
+// event
 void add_event(
         AudioContext* ctx,
         Note* note,
@@ -50,5 +52,8 @@ void add_event(
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);
+
+
+double low_pass_filter(double last_sample, double current_sample, double rc, uint sample_rate);
 
 #endif

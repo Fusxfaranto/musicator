@@ -26,18 +26,145 @@ fast_float_type sin(fast_float_type f) {
 //             message[0 .. message_size]);
 // }
 
-struct TestNoteData {
-    int key_code;
-    double volume;
+enum Tuning {
+    ET12,
+    ET19,
+    JUST,
 }
 
-AudioContext* ctx;
-Note[128] key_notes;
-TestNoteData[128] key_data;
-bool[128] key_held = false;
-bool midi_suspend = false;
+struct TestNoteDataShared {
+    int key_offset;
+}
 
-uint sample_rate;
+struct TestNoteData {
+    double pitch;
+    double volume;
+    double pitch_offset_19;
+    double last_sample;
+    TestNoteDataShared* shared_data;
+}
+
+__gshared {
+    TestNoteDataShared shared_data;
+
+    AudioContext* ctx;
+    Note[128] key_notes;
+    TestNoteData[128] key_data;
+    bool[128] key_held = false;
+    int last_key_held;
+    bool midi_suspend = false;
+    Tuning tuning = Tuning.ET19;
+
+    uint sample_rate;
+}
+
+void set_tuning() {
+    enum double C = 440 * exp2((72 - 69) / 12.0);
+
+    for (int key_code = 0; key_code < 128;
+            key_code++) {
+
+        int rel_note = (key_code + (128 * 12) - 72) % 12;
+        int octave = (key_code - rel_note) / 12;
+        double octave_scale = exp2(octave - 6.0);
+
+        final switch (tuning) {
+        case Tuning.ET12: {
+                enum cents = 100;
+                key_data[key_code].pitch = 440 * exp2(
+                        (key_code - 69) * (cents / 1200.));
+                break;
+            }
+
+        case Tuning.ET19: {
+                int alt_rel_key;
+                switch (rel_note) {
+                case 0:
+                    alt_rel_key = 0;
+                    break;
+                case 1:
+                    alt_rel_key = 1;
+                    break;
+                case 2:
+                    alt_rel_key = 3;
+                    break;
+                case 3:
+                    alt_rel_key = 5;
+                    break;
+                case 4:
+                    alt_rel_key = 6;
+                    break;
+                case 5:
+                    alt_rel_key = 8;
+                    break;
+                case 6:
+                    alt_rel_key = 9;
+                    break;
+                case 7:
+                    alt_rel_key = 11;
+                    break;
+                case 8:
+                    alt_rel_key = 13;
+                    break;
+                case 9:
+                    alt_rel_key = 14;
+                    break;
+                case 10:
+                    alt_rel_key = 16;
+                    break;
+                case 11:
+                    alt_rel_key = 17;
+                    break;
+
+                default:
+                    assert(0);
+                }
+
+                key_data[key_code].pitch = octave_scale * C
+                    * exp2(alt_rel_key / 19.);
+                break;
+            }
+
+        case Tuning.JUST: {
+                double[12] intervals;
+                if (true) {
+                    intervals[0] = 1.0;
+                    intervals[1] = 16.0 / 15.0;
+                    intervals[2] = 9.0 / 8.0;
+                    intervals[3] = 6.0 / 5.0;
+                    intervals[4] = 5.0 / 4.0;
+                    intervals[5] = 4.0 / 3.0;
+                    intervals[6] = 25.0 / 18.0;
+                    intervals[7] = 3.0 / 2.0;
+                    intervals[8] = 8.0 / 5.0;
+                    intervals[9] = 5.0 / 3.0;
+                    intervals[10] = 9.0 / 5.0;
+                    intervals[11] = 15.0 / 8.0;
+                }
+                else {
+                    intervals[0] = 1.0;
+                    intervals[1] = 14.0 / 13.0;
+                    intervals[2] = 8.0 / 7.0;
+                    intervals[3] = 6.0 / 5.0;
+                    intervals[4] = 5.0 / 4.0;
+                    intervals[5] = 4.0 / 3.0;
+                    intervals[6] = 7.0 / 5.0;
+                    intervals[7] = 3.0 / 2.0;
+                    intervals[8] = 8.0 / 5.0;
+                    intervals[9] = 5.0 / 3.0;
+                    intervals[10] = 7.0 / 4.0;
+                    intervals[11] = 13.0 / 7.0;
+
+                }
+                key_data[key_code].pitch = octave_scale
+                    * C * intervals[rel_note];
+
+                break;
+            }
+        }
+
+    }
+}
 
 double tone(ulong t, double freq, ulong sample_rate) {
     return sin(2 * PI * cast(double)(
@@ -46,74 +173,12 @@ double tone(ulong t, double freq, ulong sample_rate) {
 
 extern (C) double test_note(const NoteInput* note_input,
         const NoteInputShared* note_input_shared,
-        int expire, const void* priv) {
+        int expire, void* priv) {
     auto d = cast(TestNoteData*)priv;
 
-    static if (true) {
-        enum cents = 100;
-        double pitch = 440 * exp2(
-                (d.key_code - 69) * (cents / 1200.));
-    }
-    else static if (false) {
-        //enum cents = 77.965;
-        enum cents = 63.16;
-        double pitch = white_keys_map[i] == -1 ? 0 : 440
-            * exp2((white_keys_map[i] - 50) * (cents / 1200));
-    }
-    else static if (false) {
-        enum cents = 63.16;
-        //enum cents = 77.965;
-        //enum cents = 12.5;
-
-        double base_pitch = 440 * exp2(
-                (d.key_code - 69) / 12.);
-        int closest_key = 69 + cast(int)(
-                round(log2(base_pitch / 440) * 1200. / cents));
-
-        double pitch = 440 * exp2(
-                (closest_key - 69) * (cents / 1200.));
-    }
-    else {
-        enum double C = 440 * exp2((72 - 69) / 12.0);
-        int rel_note = (d.key_code + (128 * 12) - 72) % 12;
-        int octave = (d.key_code - rel_note) / 12;
-        double octave_scale = exp2(octave - 6.0);
-        double[12] intervals;
-        if (true) {
-            intervals[0] = 1.0;
-            intervals[1] = 16.0 / 15.0;
-            intervals[2] = 9.0 / 8.0;
-            intervals[3] = 6.0 / 5.0;
-            intervals[4] = 5.0 / 4.0;
-            intervals[5] = 4.0 / 3.0;
-            intervals[6] = 25.0 / 18.0;
-            intervals[7] = 3.0 / 2.0;
-            intervals[8] = 8.0 / 5.0;
-            intervals[9] = 5.0 / 3.0;
-            intervals[10] = 9.0 / 5.0;
-            intervals[11] = 15.0 / 8.0;
-        }
-        else {
-            intervals[0] = 1.0;
-            intervals[1] = 14.0 / 13.0;
-            intervals[2] = 8.0 / 7.0;
-            intervals[3] = 6.0 / 5.0;
-            intervals[4] = 5.0 / 4.0;
-            intervals[5] = 4.0 / 3.0;
-            intervals[6] = 7.0 / 5.0;
-            intervals[7] = 3.0 / 2.0;
-            intervals[8] = 8.0 / 5.0;
-            intervals[9] = 5.0 / 3.0;
-            intervals[10] = 7.0 / 4.0;
-            intervals[11] = 13.0 / 7.0;
-
-        }
-        double pitch = octave_scale * C
-            * intervals[rel_note];
-    }
-
-    if (pitch == 0) {
-        return 0;
+    auto pitch = d.pitch;
+    if (tuning == Tuning.ET19) {
+        pitch *= d.pitch_offset_19;
     }
 
     static if (true) {
@@ -163,13 +228,20 @@ extern (C) double test_note(const NoteInput* note_input,
         r *= max(-(S / R) * t + S, 0);
     }
 
+    if (true) {
+        enum rc = 0.0002;
+        r = low_pass_filter(d.last_sample, r, rc, note_input_shared.sample_rate);
+    }
+
+    d.last_sample = r;
+
     return r;
 }
 
 void handle_midi_message(const ubyte[] message) {
     if (message.length > 0) {
         ubyte upper = message[0] & 0b11110000;
-        assert(upper != 0b10000000);
+        //assert(upper != 0b10000000);
         switch (upper) {
         case 0b10010000: {
                 assert(message.length == 3);
@@ -181,10 +253,13 @@ void handle_midi_message(const ubyte[] message) {
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
                     if (key_held[midi_note]) {
+                        // TODO this races since the current note might still be playing
                         key_data[midi_note].volume
                             = midi_velocity / 128.;
                         key_notes[midi_note].expire
                             = EXPIRE_INDEFINITE;
+
+                        last_key_held = midi_note;
                     }
                     else {
                         // TODO
@@ -203,7 +278,43 @@ void handle_midi_message(const ubyte[] message) {
                 assert(controller < 128);
                 ubyte value = message[2];
                 assert(value < 128);
+                double fraction = value / 127.;
                 switch (controller) {
+                case 1:
+                    if (tuning == Tuning.ET19) {
+                        int p;
+                        if (fraction < 1 / 3.) {
+                            p = -1;
+                        }
+                        else if (fraction < 2 / 3.) {
+                            p = 0;
+                        }
+                        else {
+                            p = 1;
+                        }
+                        for (int k = last_key_held % 12;
+                                k < 128; k += 12) {
+                            key_data[k].pitch_offset_19
+                                = exp2(p / 19.);
+                        }
+                    }
+                    break;
+
+                case 20:
+                    if (value > 63) {
+                        tuning = inc_enum(tuning);
+                        set_tuning();
+                        writefln("switching to %s", tuning);
+                    }
+                    break;
+
+                case 21:
+                    for (int i = 0; i < 128;
+                            i++) {
+                        key_data[i].pitch_offset_19 = 1;
+                    }
+                    break;
+
                 case 64:
                     midi_suspend = value > 63;
                     writefln("suspend %s", midi_suspend);
@@ -228,11 +339,30 @@ void handle_midi_message(const ubyte[] message) {
                 break;
             }
 
+        case 0b11100000:
+            if (false) {
+                ushort value = (message[2] << 7)
+                    + message[1];
+                double fraction = value / cast(double)(
+                        1 << 14);
+                if (fraction > 0.55) {
+                    shared_data.key_offset = 1;
+                }
+                else if (fraction > 0.45) {
+                    shared_data.key_offset = 0;
+                }
+                else {
+                    shared_data.key_offset = -1;
+                }
+                writeln(fraction);
+            }
+            break;
+
         default:
             //writefln("%s", message);
             break;
         }
-        writefln("%s", message);
+        writefln("%b: %s", upper, message);
     }
     else {
         Thread.sleep(dur!"msecs"(10));
@@ -257,7 +387,10 @@ void main() {
     }
 
     for (int i = 0; i < 128; i++) {
-        key_data[i] = TestNoteData(i, double.nan);
+        key_data[i] = TestNoteData.init;
+        key_data[i].pitch_offset_19 = 1;
+        key_data[i].last_sample = 0;
+        key_data[i].shared_data = &shared_data;
         key_notes[i] = Note(0, 0,
                 &test_note, &key_data[i]);
     }
@@ -267,6 +400,8 @@ void main() {
         enforce(stop_audio(ctx) == 0);
 
     sample_rate = cast(uint)get_sample_rate(ctx);
+
+    set_tuning();
 
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(
@@ -280,7 +415,9 @@ void main() {
     rtmidi_open_port(midi_p, 0, "asdfdsa\0");
 
     // TODO
+    executeShell("aconnect 24:0 128:0");
     executeShell("aconnect 28:0 128:0");
+    executeShell("aconnect 32:0 128:0");
 
     ubyte[1024] message_buf = cast(ubyte)(-1);
     for (;;) {
