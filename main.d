@@ -37,6 +37,9 @@ struct TestNoteDataShared {
 }
 
 struct TestNoteData {
+    int t;
+    int expire_t;
+
     double pitch;
     double volume;
     double pitch_offset_19;
@@ -71,8 +74,9 @@ void set_tuning() {
         final switch (tuning) {
         case Tuning.ET12: {
                 enum cents = 100;
-                key_data[key_code].pitch = 440 * exp2(
-                        (key_code - 69) * (cents / 1200.));
+                event_write_safe(ctx, 0, 440 * exp2(
+                        (key_code - 69) * (cents / 1200.)),
+                        &key_data[key_code].pitch);
                 break;
             }
 
@@ -120,8 +124,10 @@ void set_tuning() {
                     assert(0);
                 }
 
-                key_data[key_code].pitch = octave_scale * C
-                    * exp2(alt_rel_key / 19.);
+                event_write_safe(ctx, 0,
+                        octave_scale * C * exp2(
+                            alt_rel_key / 19.),
+                        &key_data[key_code].pitch);
                 break;
             }
 
@@ -156,8 +162,9 @@ void set_tuning() {
                     intervals[11] = 13.0 / 7.0;
 
                 }
-                key_data[key_code].pitch = octave_scale
-                    * C * intervals[rel_note];
+                event_write_safe(ctx, 0,
+                        octave_scale * C * intervals[rel_note],
+                        &key_data[key_code].pitch);
 
                 break;
             }
@@ -209,33 +216,47 @@ extern (C) double test_note(const NoteInput* note_input,
     enum A = 0.01;
     enum D = 0.08;
     enum S = 0.35;
-    enum R = 0.2;
+    enum R = 0.3;
 
-    double t = note_input.t / cast(
+    double t = d.t / cast(
             double)note_input_shared.sample_rate;
-    if (expire <= EXPIRE_INDEFINITE) {
-        if (t <= A) {
-            r *= t / A;
-        }
-        else if (t <= D + A) {
-            r *= ((S - 1) / D) * (t - A) + 1;
-        }
-        else {
-            r *= S;
-        }
+    if (t <= A) {
+        r *= t / A;
+    }
+    else if (t <= D + A) {
+        r *= ((S - 1) / D) * (t - A) + 1;
     }
     else {
-        r *= max(-(S / R) * t + S, 0);
+        if (false) {
+            r *= S;
+        } else {
+            r *= S / ((t - D - A + 1) ^^ 2);
+        }
+    }
+    if (expire > EXPIRE_INDEFINITE) {
+        double expire_t = d.expire_t / cast(
+            double)note_input_shared.sample_rate;
+        r *= max(-(1 / R) * expire_t + 1, 0);
+        d.expire_t++;
     }
 
     if (true) {
         enum rc = 0.0002;
-        r = low_pass_filter(d.last_sample, r, rc, note_input_shared.sample_rate);
+        r = low_pass_filter(d.last_sample, r, rc,
+                note_input_shared.sample_rate);
     }
 
     d.last_sample = r;
+    d.t++;
 
     return r;
+}
+
+void event_write_safe(T, S)(AudioContext* ctx,
+        ulong at_count, auto ref S source, T* target)
+        if (is(S : T)) {
+    T t = source;
+    event_write(ctx, at_count, &t, t.sizeof, target);
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -253,21 +274,27 @@ void handle_midi_message(const ubyte[] message) {
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
                     if (key_held[midi_note]) {
-                        // TODO this races since the current note might still be playing
-                        key_data[midi_note].volume
-                            = midi_velocity / 128.;
+                        event_write_safe(ctx, 0,
+                                midi_velocity / 128.,
+                                &key_data[midi_note].volume);
+                        event_write_safe(ctx, 0, 0,
+                                &key_data[midi_note].t);
+
                         key_notes[midi_note].expire
                             = EXPIRE_INDEFINITE;
 
                         last_key_held = midi_note;
                     }
                     else {
-                        // TODO
+                        event_write_safe(ctx, 0, 0,
+                                &key_data[midi_note].expire_t);
+
+                        // TODO figure out a way to do this that doesn't require hardcoding an expiry time
                         key_notes[midi_note].expire
-                            = sample_rate / 2;
+                            = sample_rate;
                     }
-                    add_event(ctx,
-                            &key_notes[midi_note], 0);
+                    event_note(ctx, 0,
+                            &key_notes[midi_note]);
                 }
                 break;
             }
@@ -294,8 +321,9 @@ void handle_midi_message(const ubyte[] message) {
                         }
                         for (int k = last_key_held % 12;
                                 k < 128; k += 12) {
-                            key_data[k].pitch_offset_19
-                                = exp2(p / 19.);
+                            event_write_safe(ctx, 0,
+                                    exp2(p / 19.), &key_data[k]
+                                    .pitch_offset_19);
                         }
                     }
                     break;
@@ -311,7 +339,9 @@ void handle_midi_message(const ubyte[] message) {
                 case 21:
                     for (int i = 0; i < 128;
                             i++) {
-                        key_data[i].pitch_offset_19 = 1;
+                        event_write_safe(ctx, 0, 1,
+                                &key_data[i]
+                                .pitch_offset_19);
                     }
                     break;
 
@@ -325,9 +355,9 @@ void handle_midi_message(const ubyte[] message) {
                                     && key_notes[i].expire
                                     <= EXPIRE_INDEFINITE) {
                                 key_notes[i].expire
-                                    = sample_rate / 2;
-                                add_event(ctx,
-                                        &key_notes[i], 0);
+                                    = sample_rate;
+                                event_note(ctx, 0,
+                                        &key_notes[i]);
                             }
                         }
                     }
