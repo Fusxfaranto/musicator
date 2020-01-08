@@ -1,7 +1,8 @@
 import std.algorithm : max;
 import std.datetime : dur;
 import std.exception : enforce;
-import std.math : exp2, log2, PI, pow, round, _sin = sin;
+import std.math : exp2, log2, PI, pow,
+    round, fmod, _sin = sin;
 import std.process : executeShell;
 import std.stdio : writeln, writefln;
 
@@ -37,13 +38,11 @@ struct TestNoteDataShared {
 }
 
 struct TestNoteData {
-    int t;
-    int expire_t;
-
     double pitch;
     double volume;
     double pitch_offset_19;
-    double last_sample;
+    ulong started_at;
+    ulong released_at;
     TestNoteDataShared* shared_data;
 }
 
@@ -54,6 +53,7 @@ __gshared {
     Note[128] key_notes;
     TestNoteData[128] key_data;
     bool[128] key_held = false;
+    bool[128] key_held_soft = false;
     int last_key_held;
     bool midi_suspend = false;
     Tuning tuning = Tuning.ET19;
@@ -180,15 +180,15 @@ double tone(ulong t, double freq, ulong sample_rate) {
 
 extern (C) double test_note(const NoteInput* note_input,
         const NoteInputShared* note_input_shared,
-        int expire, void* priv) {
-    auto d = cast(TestNoteData*)priv;
+        bool* expire, const void* priv) {
+    auto d = cast(const TestNoteData*)priv;
 
-    auto pitch = d.pitch;
+    double pitch = d.pitch;
     if (tuning == Tuning.ET19) {
         pitch *= d.pitch_offset_19;
     }
 
-    static if (true) {
+    static if (false) {
         static __gshared double[] ots = [
             1.0, 1.0, 0.5, 0.6, 0.4, 0.3,
             0.2, 0.2, 0.1, 0.1, 0.1,
@@ -201,11 +201,28 @@ extern (C) double test_note(const NoteInput* note_input,
         double r = 0;
         for (uint i = 0; i < ots.length; i++) {
             s += ots[i];
-            r += ots[i] * tone(note_input_shared.t,
+            // TODO figure out a good way to do this that doesn't have issues with float precision
+            r += ots[i] * tone(
+                    note_input_shared.t - d.started_at,
                     pitch * cast(double)(i + 1),
                     note_input_shared.sample_rate);
         }
         r /= s;
+    }
+    else static if (true) {
+        double r = fmod(pitch * cast(double)(
+                note_input_shared.t - d.started_at)
+                / note_input_shared.sample_rate, 1.0) > 0.5 ? 1.0 : -1.0;
+    }
+    else static if (true) {
+        double r = 2 * fmod(pitch * cast(double)(
+                note_input_shared.t - d.started_at)
+                / note_input_shared.sample_rate, 1.0) - 1.0;
+
+        if (false) {
+            r *= tone(note_input_shared.t - d.started_at,
+                    pitch, note_input_shared.sample_rate);
+        }
     }
     else {
         double r = tone(note_input_shared.t, pitch,
@@ -218,7 +235,7 @@ extern (C) double test_note(const NoteInput* note_input,
     enum S = 0.35;
     enum R = 0.3;
 
-    double t = d.t / cast(
+    double t = (note_input_shared.t - d.started_at) / cast(
             double)note_input_shared.sample_rate;
     if (t <= A) {
         r *= t / A;
@@ -229,25 +246,32 @@ extern (C) double test_note(const NoteInput* note_input,
     else {
         if (false) {
             r *= S;
-        } else {
+        }
+        else {
             r *= S / ((t - D - A + 1) ^^ 2);
         }
     }
-    if (expire > EXPIRE_INDEFINITE) {
-        double expire_t = d.expire_t / cast(
-            double)note_input_shared.sample_rate;
-        r *= max(-(1 / R) * expire_t + 1, 0);
-        d.expire_t++;
+    // TODO is this condition bad?
+    if (d.released_at >= d.started_at) {
+        double expire_t = (
+                note_input_shared.t - d.released_at) / cast(
+                double)note_input_shared.sample_rate;
+        double s = -(1 / R) * expire_t + 1;
+        if (s <= 0) {
+            *expire = true;
+            return 0;
+        }
+        r *= s;
     }
 
-    if (true) {
-        enum rc = 0.0002;
+    // TODO provide built-in sample cache for filters
+    static if (false) {
+        enum rc = 0.0005;
         r = low_pass_filter(d.last_sample, r, rc,
                 note_input_shared.sample_rate);
     }
 
-    d.last_sample = r;
-    d.t++;
+    r *= d.volume;
 
     return r;
 }
@@ -277,24 +301,20 @@ void handle_midi_message(const ubyte[] message) {
                         event_write_safe(ctx, 0,
                                 midi_velocity / 128.,
                                 &key_data[midi_note].volume);
-                        event_write_safe(ctx, 0, 0,
-                                &key_data[midi_note].t);
-
-                        key_notes[midi_note].expire
-                            = EXPIRE_INDEFINITE;
+                        event_write_time(ctx, 0,
+                                &key_data[midi_note]
+                                .started_at);
+                        event_note(ctx, 0,
+                                &key_notes[midi_note]);
 
                         last_key_held = midi_note;
                     }
                     else {
-                        event_write_safe(ctx, 0, 0,
-                                &key_data[midi_note].expire_t);
-
-                        // TODO figure out a way to do this that doesn't require hardcoding an expiry time
-                        key_notes[midi_note].expire
-                            = sample_rate;
+                        event_write_time(ctx, 0,
+                                &key_data[midi_note]
+                                .released_at);
                     }
-                    event_note(ctx, 0,
-                            &key_notes[midi_note]);
+                    key_held_soft[midi_note] = key_held[midi_note];
                 }
                 break;
             }
@@ -352,12 +372,12 @@ void handle_midi_message(const ubyte[] message) {
                         for (int i = 0; i < 128;
                                 i++) {
                             if (!key_held[i]
-                                    && key_notes[i].expire
-                                    <= EXPIRE_INDEFINITE) {
-                                key_notes[i].expire
-                                    = sample_rate;
-                                event_note(ctx, 0,
-                                        &key_notes[i]);
+                                    && key_held_soft[i]) {
+                                // TODO dedupe?
+                                event_write_time(ctx, 0,
+                                        &key_data[i]
+                                        .released_at);
+                                key_held_soft[i] = false;
                             }
                         }
                     }
@@ -419,10 +439,10 @@ void main() {
     for (int i = 0; i < 128; i++) {
         key_data[i] = TestNoteData.init;
         key_data[i].pitch_offset_19 = 1;
-        key_data[i].last_sample = 0;
+        key_data[i].started_at = 0;
+        key_data[i].released_at = 0;
         key_data[i].shared_data = &shared_data;
-        key_notes[i] = Note(0, 0,
-                &test_note, &key_data[i]);
+        key_notes[i] = Note(0, &test_note, &key_data[i]);
     }
 
     enforce(start_audio(&ctx) == 0);

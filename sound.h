@@ -3,13 +3,14 @@
 
 #include "cubeb/cubeb.h"
 
-typedef uint_fast32_t uint;
+typedef uint64_t uint;
 typedef _Bool bool;
 
 #define PI 3.14159265358979323846
 
-// TODO do we want to provide this?
+// TODO provide start/release times here?
 typedef struct {
+    // TODO do we want to provide this?
     uint t;
 } NoteInput;
 
@@ -21,19 +22,15 @@ typedef struct {
 typedef double (*NoteFn)(
         const NoteInput*,
         const NoteInputShared*,
-        int expire,
-        void* /* priv */);
+        bool* expire,
+        const void* /* priv */);
 
 typedef struct {
     uint id;
-    int expire;
 
     NoteFn fn;
     void* priv;
 } Note;
-
-// if expire is <= this, note does not expire
-const int EXPIRE_INDEFINITE = -268435455;
 
 #define EMPTY_NOTE \
     (Note) { .id = 0, .fn = NULL }
@@ -42,6 +39,7 @@ typedef struct AudioContext AudioContext;
 
 uint get_sample_rate(AudioContext* ctx);
 
+// TODO consolidate these by exposing Event
 void event_note(
         AudioContext* ctx,
         uint64_t at_count,
@@ -53,6 +51,11 @@ void event_write(
         const void* source,
         size_t len,
         void* target);
+
+void event_write_time(
+        AudioContext* ctx,
+        uint64_t at_count,
+        uint* target);
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);

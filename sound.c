@@ -42,6 +42,7 @@ ATOMIC_INC_MOD_FUNC(uint_fast32_t);
 typedef enum {
     EVENT_NOTE,
     EVENT_WRITE,
+    EVENT_WRITE_TIME,
 } EventType;
 
 #define MAX_EVENT_BYTES 16
@@ -152,6 +153,19 @@ void event_write(
     add_event(ctx, e);
 }
 
+void event_write_time(
+        AudioContext* ctx,
+        uint64_t at_count,
+        uint* target) {
+    Event e = (Event){
+            .type = EVENT_WRITE_TIME,
+            .at_count = at_count,
+            .target = target,
+    };
+
+    add_event(ctx, e);
+}
+
 static uint process_events(StreamPriv* p, uint64_t n) {
     uint next_n;
     uint64_t end = p->c + n;
@@ -222,6 +236,11 @@ static uint process_events(StreamPriv* p, uint64_t n) {
             break;
         }
 
+        case EVENT_WRITE_TIME: {
+            *(uint*)(e->target) = p->c;
+            break;
+        }
+
         default:
             assert(0);
         }
@@ -259,9 +278,11 @@ static long data_cb(
         // event
         uint64_t next_n = process_events(p, n);
 
-        // TODO it'd probably be faster to invert these loops
+        // TODO it'd probably be faster to invert these
+        // loops
         for (uint i = 0; i < next_n; i++) {
             double r = 0;
+            bool expire = false;
 
             for (uint note_idx = 0;
                  note_idx < p->note_buf_size;
@@ -270,21 +291,13 @@ static long data_cb(
                     r += p->note_buf[note_idx].fn(
                             &p->note_input_buf[note_idx],
                             &note_input_shared,
-                            p->note_buf[note_idx].expire,
+                            &expire,
                             p->note_buf[note_idx].priv);
                     p->note_input_buf[note_idx].t++;
-                    p->note_buf[note_idx].expire--;
 
-                    // TODO better place to do this?
-                    if (p->note_buf[note_idx].expire <= 0) {
-                        if (p->note_buf[note_idx].expire <
-                            EXPIRE_INDEFINITE) {
-                            p->note_buf[note_idx].expire =
-                                    EXPIRE_INDEFINITE;
-                        } else {
-                            p->note_buf[note_idx] =
-                                    EMPTY_NOTE;
-                        }
+                    if (expire) {
+                        p->note_buf[note_idx] = EMPTY_NOTE;
+                        expire = false;
                     }
                 }
             }
@@ -292,6 +305,7 @@ static long data_cb(
             r *= p->volume;
 
             // TODO stereo
+            // TODO use integer samples instead of float?
             for (uint c = 0; c < 2; c++) {
                 out[2 * i + c] = (float)r;
             }
@@ -327,7 +341,7 @@ static void init_stream_priv(
     *p = (StreamPriv){
             .c = 0,
             .sample_rate = sample_rate,
-            .volume = 0.1,
+            .volume = 1.0,
 
             .note_buf = malloc(sizeof(Note) * nbl),
             .note_input_buf =
@@ -341,6 +355,7 @@ static void init_stream_priv(
 
     for (uint i = 0; i < nbl; i++) {
         p->note_buf[i] = EMPTY_NOTE;
+        p->note_input_buf[i] = (NoteInput){0};
     }
 
     atomic_store(&p->note_next_id, 1);
