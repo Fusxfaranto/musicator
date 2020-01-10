@@ -1,4 +1,5 @@
 import std.algorithm : max;
+import std.conv : to;
 import std.datetime : dur;
 import std.exception : enforce;
 import std.math : exp2, log2, PI, pow,
@@ -210,9 +211,8 @@ extern (C) double test_note(const NoteInput* note_input,
         r /= s;
     }
     else static if (true) {
-        double r = fmod(pitch * cast(double)(
-                note_input_shared.t - d.started_at)
-                / note_input_shared.sample_rate, 1.0) > 0.5 ? 1.0 : -1.0;
+        long period = round(note_input_shared.sample_rate / pitch).to!long;
+        double r = (note_input_shared.t - d.started_at) % period >= period / 2 ? 1.0 : -1.0;
     }
     else static if (true) {
         double r = 2 * fmod(pitch * cast(double)(

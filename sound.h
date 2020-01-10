@@ -39,6 +39,18 @@ typedef struct AudioContext AudioContext;
 
 uint get_sample_rate(AudioContext* ctx);
 
+// TODO add event to set value to function
+// TODO consider:
+// - make "set value to function" identical to "note with
+// function"
+// - add "consolidation function" to genericize summation of
+// multiple assignments?
+
+// TODO at some point going to need some sort of toposort to
+// figure out dependencies between different values (which
+// also means the runtime needs to be aware of input
+// dependencies)
+
 // TODO consolidate these by exposing Event
 void event_note(
         AudioContext* ctx,
