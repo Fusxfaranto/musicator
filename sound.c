@@ -40,35 +40,21 @@ ATOMIC_INC_MOD_FUNC(uint_fast32_t);
 #define atomic_inc_mod atomic_inc_mod_uint_fast32_t
 
 typedef enum {
-    EVENT_NOTE,
-    EVENT_WRITE,
-    EVENT_WRITE_TIME,
-} EventType;
-
-#define MAX_EVENT_BYTES 16
-typedef struct {
-    EventType type;
-    uint64_t at_count;
-
-    union {
-        Note note;
-        struct {
-            void* target;
-            size_t len;
-            uint8_t bytes[MAX_EVENT_BYTES];
-        };
-    };
-} Event;
+    VALUE_KEEP,
+    VALUE_RESET,
+} ValueState;
 
 typedef struct {
     uint64_t c;
     uint sample_rate;
     double volume;
 
-    Note* note_buf;
-    NoteInput* note_input_buf;
-    uint note_buf_size;
-    atomic_uint_fast32_t note_next_id;
+    ValueSetter* setter_buf;
+    uint setter_buf_size;
+
+    double* value_buf;
+    ValueState* value_state_buf;
+    uint value_buf_size;
 
     Event* event_buf;
     atomic_bool* event_ready;
@@ -98,72 +84,15 @@ uint get_sample_rate(AudioContext* ctx) {
     return ctx->priv.sample_rate;
 }
 
-static void add_event(AudioContext* ctx, Event e) {
+void add_event(AudioContext* ctx, const Event* e) {
     StreamPriv* p = &ctx->priv;
 
     uint event_idx = atomic_inc_mod(
             &p->event_reserved_pos, p->event_buf_size);
-    p->event_buf[event_idx] = e;
+    p->event_buf[event_idx] = *e;
 
     assert(!atomic_load(&p->event_ready[event_idx]));
     atomic_store(&p->event_ready[event_idx], true);
-}
-
-void event_note(
-        AudioContext* ctx,
-        uint64_t at_count,
-        Note* note) {
-    StreamPriv* p = &ctx->priv;
-
-    assert(note);
-    assert(note->fn);
-
-    if (note->id == 0) {
-        note->id = atomic_fetch_add(&p->note_next_id, 1);
-        assert(atomic_load(&p->note_next_id) != 0);
-    }
-
-    add_event(
-            ctx,
-            (Event){
-                    .type = EVENT_NOTE,
-                    .at_count = at_count,
-                    .note = *note,
-            });
-}
-
-void event_write(
-        AudioContext* ctx,
-        uint64_t at_count,
-        const void* source,
-        size_t len,
-        void* target) {
-    assert(len <= MAX_EVENT_BYTES);
-
-    Event e = (Event){
-            .type = EVENT_WRITE,
-            .at_count = at_count,
-            .target = target,
-            .len = len,
-    };
-    for (size_t i = 0; i < len; i++) {
-        e.bytes[i] = ((const uint8_t*)(source))[i];
-    }
-
-    add_event(ctx, e);
-}
-
-void event_write_time(
-        AudioContext* ctx,
-        uint64_t at_count,
-        uint* target) {
-    Event e = (Event){
-            .type = EVENT_WRITE_TIME,
-            .at_count = at_count,
-            .target = target,
-    };
-
-    add_event(ctx, e);
 }
 
 static uint process_events(StreamPriv* p, uint64_t n) {
@@ -176,14 +105,13 @@ static uint process_events(StreamPriv* p, uint64_t n) {
         }
 
         Event* e = &p->event_buf[p->event_pos];
-        uint64_t next_c = e->at_count;
-        if (next_c < p->c) {
+        if (e->at_count < p->c) {
             // event "in the past" (process it now)
-            next_c = p->c;
+            e->at_count = p->c;
         }
-        if (next_c < end) {
+        if (e->at_count < end) {
             // event will need processing
-            next_n = next_c - p->c;
+            next_n = e->at_count - p->c;
         } else {
             // event not needed this call
             next_n = end - p->c;
@@ -197,54 +125,56 @@ static uint process_events(StreamPriv* p, uint64_t n) {
         printf("processing event %lu\n", p->event_pos);
 
         switch (e->type) {
-        case EVENT_NOTE: {
-            uint note_buf_idx = (uint)-1;
+        case EVENT_SETTER: {
+            uint setter_buf_idx = (uint)-1;
             // TODO something faster if we're not updating
             // an existing note?
-            for (uint i = 0; i < p->note_buf_size; i++) {
-                if (p->note_buf[i].id == e->note.id) {
-                    note_buf_idx = i;
+            for (uint i = 0; i < p->setter_buf_size; i++) {
+                if (p->setter_buf[i].id == e->setter.id) {
+                    setter_buf_idx = i;
                     break;
                 }
             }
-            if (note_buf_idx == (uint)-1) {
-                for (uint i = 0; i < p->note_buf_size;
+            if (setter_buf_idx == (uint)-1) {
+                for (uint i = 0; i < p->setter_buf_size;
                      i++) {
-                    if (p->note_buf[i].fn == NULL) {
-                        note_buf_idx = i;
+                    if (p->setter_buf[i].fn == NULL) {
+                        setter_buf_idx = i;
                         break;
                     }
                 }
             }
             // TODO handle out-of-space
-            assert(note_buf_idx != (uint)-1);
+            assert(setter_buf_idx != (uint)-1);
 
-            // TODO do we want this?
-            // if (p->note_buf[note_buf_idx].fn == NULL) {
-            if (false) {
-                p->note_input_buf[note_buf_idx] =
-                        (NoteInput){
-                                .t = 0,
-                        };
-            }
-            p->note_buf[note_buf_idx] = e->note;
+            p->setter_buf[setter_buf_idx] = e->setter;
+            assert(e->setter.target_idx >= 0 &&
+                   (uint)(e->setter.target_idx) <
+                           p->value_buf_size);
+            p->value_state_buf[e->setter.target_idx] =
+                    VALUE_RESET;
             break;
         }
 
         case EVENT_WRITE: {
-            memcpy(e->target, &e->bytes, e->len);
+            assert(e->target_idx >= 0 &&
+                   (uint)(e->target_idx) <
+                           p->value_buf_size);
+            p->value_state_buf[e->target_idx] = VALUE_KEEP;
+            p->value_buf[e->target_idx] = e->value;
             break;
         }
 
         case EVENT_WRITE_TIME: {
-            *(uint*)(e->target) = p->c;
+            assert(e->target_idx >= 0 &&
+                   (uint)(e->target_idx) <
+                           p->value_buf_size);
+            p->value_state_buf[e->target_idx] = VALUE_KEEP;
+            // TODO bad
+            *(uint*)(&p->value_buf[e->target_idx]) = p->c;
             break;
         }
-
-        default:
-            assert(0);
         }
-
         atomic_store(&p->event_ready[p->event_pos], false);
 
         p->event_pos =
@@ -267,10 +197,10 @@ static long data_cb(
     uint64_t n = (uint64_t)n_signed;
     uint64_t end = p->c + n;
 
-    // TODO make this per note?
-    NoteInputShared note_input_shared = (NoteInputShared){
+    ValueInput value_input = (ValueInput){
             .t = p->c,
             .sample_rate = p->sample_rate,
+            .values = p->value_buf,
     };
 
     for (;;) {
@@ -278,30 +208,42 @@ static long data_cb(
         // event
         uint64_t next_n = process_events(p, n);
 
+        // TODO don't clear every value?
+        // (have some extra per-value state?)
+        for (uint i = 0; i < p->value_buf_size; i++) {
+            if (p->value_state_buf[i] == VALUE_RESET) {
+                p->value_buf[i] = 0;
+            }
+        }
+
         // TODO it'd probably be faster to invert these
         // loops
         for (uint i = 0; i < next_n; i++) {
-            double r = 0;
             bool expire = false;
 
-            for (uint note_idx = 0;
-                 note_idx < p->note_buf_size;
-                 note_idx++) {
-                if (p->note_buf[note_idx].fn) {
-                    r += p->note_buf[note_idx].fn(
-                            &p->note_input_buf[note_idx],
-                            &note_input_shared,
-                            &expire,
-                            p->note_buf[note_idx].priv);
-                    p->note_input_buf[note_idx].t++;
+            for (uint setter_idx = 0;
+                 setter_idx < p->setter_buf_size;
+                 setter_idx++) {
+                if (p->setter_buf[setter_idx].fn) {
+                    double* target =
+                            &p->value_buf
+                                     [p->setter_buf[setter_idx]
+                                              .target_idx];
+                    *target += p->setter_buf[setter_idx].fn(
+                            &value_input,
+                            p->setter_buf[setter_idx]
+                                    .local_idxs,
+                            &expire);
 
                     if (expire) {
-                        p->note_buf[note_idx] = EMPTY_NOTE;
+                        p->setter_buf[setter_idx] =
+                                EMPTY_SETTER;
                         expire = false;
                     }
                 }
             }
 
+            double r = p->value_buf[0];
             r *= p->volume;
 
             // TODO stereo
@@ -310,7 +252,7 @@ static long data_cb(
                 out[2 * i + c] = (float)r;
             }
 
-            note_input_shared.t++;
+            value_input.t++;
         }
 
         p->c += next_n;
@@ -336,29 +278,39 @@ state_cb(cubeb_stream* stm, void* user, cubeb_state state) {
 static void init_stream_priv(
         StreamPriv* p,
         uint sample_rate) {
+    // TODO
     uint ebl = 4096;
     uint nbl = 64;
+    uint value_num = 4096;
+
     *p = (StreamPriv){
             .c = 0,
             .sample_rate = sample_rate,
             .volume = 1.0,
 
-            .note_buf = malloc(sizeof(Note) * nbl),
-            .note_input_buf =
-                    malloc(sizeof(NoteInput) * nbl),
-            .note_buf_size = nbl,
+            .setter_buf = malloc(sizeof(ValueSetter) * nbl),
+            .setter_buf_size = nbl,
+
+            .value_buf = malloc(sizeof(double) * value_num),
+            .value_state_buf =
+                    malloc(sizeof(ValueState) * value_num),
+            .value_buf_size = value_num,
 
             .event_buf = malloc(sizeof(Event) * ebl),
             .event_ready = malloc(sizeof(bool) * ebl),
             .event_buf_size = ebl,
     };
 
+    for (uint i = 0; i < value_num; i++) {
+        p->value_buf[i] = NAN;
+        p->value_state_buf[i] = VALUE_KEEP;
+    }
+    p->value_state_buf[0] = VALUE_RESET;
+
     for (uint i = 0; i < nbl; i++) {
-        p->note_buf[i] = EMPTY_NOTE;
-        p->note_input_buf[i] = (NoteInput){0};
+        p->setter_buf[i] = EMPTY_SETTER;
     }
 
-    atomic_store(&p->note_next_id, 1);
     for (uint i = 0; i < ebl; i++) {
         atomic_store(&p->event_ready[i], false);
     }

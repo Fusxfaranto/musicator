@@ -34,25 +34,18 @@ enum Tuning {
     JUST,
 }
 
-struct TestNoteDataShared {
-    int key_offset;
-}
-
-struct TestNoteData {
-    double pitch;
-    double volume;
-    double pitch_offset_19;
-    ulong started_at;
-    ulong released_at;
-    TestNoteDataShared* shared_data;
+enum TestNoteLocalIdxs {
+    pitch,
+    volume,
+    pitch_offset_19,
+    started_at,
+    released_at,
 }
 
 __gshared {
-    TestNoteDataShared shared_data;
-
     AudioContext* ctx;
-    Note[128] key_notes;
-    TestNoteData[128] key_data;
+    int[128 * (TestNoteLocalIdxs.max + 1)] key_local_idxs;
+
     bool[128] key_held = false;
     bool[128] key_held_soft = false;
     int last_key_held;
@@ -62,11 +55,25 @@ __gshared {
     uint sample_rate;
 }
 
+int get_key_idx(int keycode) {
+    // TODO ???
+    return keycode + 100;
+}
+
+int get_local_idx(int keycode, TestNoteLocalIdxs local) {
+    // TODO ??
+    return 5 + keycode * (TestNoteLocalIdxs.max + 1) + local;
+}
+
 void set_tuning() {
     enum double C = 440 * exp2((72 - 69) / 12.0);
 
     for (int key_code = 0; key_code < 128;
             key_code++) {
+        Event e;
+        e.type = EventType.EVENT_WRITE;
+        e.target_idx = get_local_idx(key_code,
+                TestNoteLocalIdxs.pitch);
 
         int rel_note = (key_code + (128 * 12) - 72) % 12;
         int octave = (key_code - rel_note) / 12;
@@ -75,9 +82,9 @@ void set_tuning() {
         final switch (tuning) {
         case Tuning.ET12: {
                 enum cents = 100;
-                event_write_safe(ctx, 0, 440 * exp2(
-                        (key_code - 69) * (cents / 1200.)),
-                        &key_data[key_code].pitch);
+                e.value = 440 * exp2(
+                        (key_code - 69) * (cents / 1200.));
+                add_event(ctx, &e);
                 break;
             }
 
@@ -125,10 +132,9 @@ void set_tuning() {
                     assert(0);
                 }
 
-                event_write_safe(ctx, 0,
-                        octave_scale * C * exp2(
-                            alt_rel_key / 19.),
-                        &key_data[key_code].pitch);
+                e.value = octave_scale * C * exp2(
+                        alt_rel_key / 19.);
+                add_event(ctx, &e);
                 break;
             }
 
@@ -163,9 +169,9 @@ void set_tuning() {
                     intervals[11] = 13.0 / 7.0;
 
                 }
-                event_write_safe(ctx, 0,
-                        octave_scale * C * intervals[rel_note],
-                        &key_data[key_code].pitch);
+                e.value = octave_scale * C
+                    * intervals[rel_note];
+                add_event(ctx, &e);
 
                 break;
             }
@@ -179,14 +185,22 @@ double tone(ulong t, double freq, ulong sample_rate) {
             t) * freq / cast(double)sample_rate);
 }
 
-extern (C) double test_note(const NoteInput* note_input,
-        const NoteInputShared* note_input_shared,
-        bool* expire, const void* priv) {
-    auto d = cast(const TestNoteData*)priv;
+extern (C) double test_note(const ValueInput* input,
+        const int* local_idxs, bool* expire) {
+    double pitch = input
+        .values[local_idxs[TestNoteLocalIdxs.pitch]];
+    double pitch_offset_19 = input.values[local_idxs[TestNoteLocalIdxs
+            .pitch_offset_19]];
+    double volume = input
+        .values[local_idxs[TestNoteLocalIdxs.volume]];
+    ulong started_at = reinterpret!ulong(input
+            .values[local_idxs[TestNoteLocalIdxs.started_at]]);
+    ulong released_at = reinterpret!ulong(input
+            .values[local_idxs[TestNoteLocalIdxs
+                    .released_at]]);
 
-    double pitch = d.pitch;
     if (tuning == Tuning.ET19) {
-        pitch *= d.pitch_offset_19;
+        pitch *= pitch_offset_19;
     }
 
     static if (false) {
@@ -211,8 +225,9 @@ extern (C) double test_note(const NoteInput* note_input,
         r /= s;
     }
     else static if (true) {
-        long period = round(note_input_shared.sample_rate / pitch).to!long;
-        double r = (note_input_shared.t - d.started_at) % period >= period / 2 ? 1.0 : -1.0;
+        long period = cast(long)round(
+                input.sample_rate / pitch);
+        double r = (input.t - started_at) % period >= period / 2 ? 1.0 : -1.0;
     }
     else static if (true) {
         double r = 2 * fmod(pitch * cast(double)(
@@ -235,8 +250,8 @@ extern (C) double test_note(const NoteInput* note_input,
     enum S = 0.35;
     enum R = 0.3;
 
-    double t = (note_input_shared.t - d.started_at) / cast(
-            double)note_input_shared.sample_rate;
+    double t = (input.t - started_at) / cast(double)input
+        .sample_rate;
     if (t <= A) {
         r *= t / A;
     }
@@ -252,10 +267,9 @@ extern (C) double test_note(const NoteInput* note_input,
         }
     }
     // TODO is this condition bad?
-    if (d.released_at >= d.started_at) {
-        double expire_t = (
-                note_input_shared.t - d.released_at) / cast(
-                double)note_input_shared.sample_rate;
+    if (released_at >= started_at) {
+        double expire_t = (input.t - released_at) / cast(
+                double)input.sample_rate;
         double s = -(1 / R) * expire_t + 1;
         if (s <= 0) {
             *expire = true;
@@ -271,16 +285,9 @@ extern (C) double test_note(const NoteInput* note_input,
                 note_input_shared.sample_rate);
     }
 
-    r *= d.volume;
+    r *= volume;
 
     return r;
-}
-
-void event_write_safe(T, S)(AudioContext* ctx,
-        ulong at_count, auto ref S source, T* target)
-        if (is(S : T)) {
-    T t = source;
-    event_write(ctx, at_count, &t, t.sizeof, target);
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -297,22 +304,40 @@ void handle_midi_message(const ubyte[] message) {
 
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
+                    Event e;
                     if (key_held[midi_note]) {
-                        event_write_safe(ctx, 0,
-                                midi_velocity / 128.,
-                                &key_data[midi_note].volume);
-                        event_write_time(ctx, 0,
-                                &key_data[midi_note]
+                        e.type = EventType.EVENT_WRITE;
+                        e.target_idx = get_local_idx(
+                                midi_note,
+                                TestNoteLocalIdxs.volume);
+                        e.value = midi_velocity / 128.;
+                        add_event(ctx, &e);
+
+                        e = Event.init;
+                        e.type = EventType.EVENT_WRITE_TIME;
+                        e.target_idx = get_local_idx(
+                                midi_note,
+                                TestNoteLocalIdxs
                                 .started_at);
-                        event_note(ctx, 0,
-                                &key_notes[midi_note]);
+                        add_event(ctx, &e);
+
+                        e = Event.init;
+                        e.type = EventType.EVENT_SETTER;
+                        e.setter = ValueSetter(&test_note,
+                                &key_local_idxs[midi_note * (
+                                        TestNoteLocalIdxs.max + 1)],
+                                0, get_key_idx(midi_note));
+                        add_event(ctx, &e);
 
                         last_key_held = midi_note;
                     }
                     else {
-                        event_write_time(ctx, 0,
-                                &key_data[midi_note]
+                        e.type = EventType.EVENT_WRITE_TIME;
+                        e.target_idx = get_local_idx(
+                                midi_note,
+                                TestNoteLocalIdxs
                                 .released_at);
+                        add_event(ctx, &e);
                     }
                     key_held_soft[midi_note] = key_held[midi_note];
                 }
@@ -339,11 +364,15 @@ void handle_midi_message(const ubyte[] message) {
                         else {
                             p = 1;
                         }
+                        Event e;
+                        e.type = EventType.EVENT_WRITE;
+                        e.value = exp2(p / 19.);
                         for (int k = last_key_held % 12;
                                 k < 128; k += 12) {
-                            event_write_safe(ctx, 0,
-                                    exp2(p / 19.), &key_data[k]
+                            e.target_idx = get_local_idx(k,
+                                    TestNoteLocalIdxs
                                     .pitch_offset_19);
+                            add_event(ctx, &e);
                         }
                     }
                     break;
@@ -356,27 +385,34 @@ void handle_midi_message(const ubyte[] message) {
                     }
                     break;
 
-                case 21:
-                    for (int i = 0; i < 128;
-                            i++) {
-                        event_write_safe(ctx, 0, 1,
-                                &key_data[i]
-                                .pitch_offset_19);
+                case 21: {
+                        Event e;
+                        e.type = EventType.EVENT_WRITE;
+                        e.value = 1;
+                        for (int i = 0; i < 128;
+                                i++) {
+                            e.target_idx = get_local_idx(i,
+                                    TestNoteLocalIdxs
+                                    .pitch_offset_19);
+                            add_event(ctx, &e);
+                        }
+                        break;
                     }
-                    break;
 
                 case 64:
                     midi_suspend = value > 63;
                     writefln("suspend %s", midi_suspend);
                     if (!midi_suspend) {
+                        Event e;
+                        e.type = EventType.EVENT_WRITE_TIME;
                         for (int i = 0; i < 128;
                                 i++) {
                             if (!key_held[i]
                                     && key_held_soft[i]) {
-                                // TODO dedupe?
-                                event_write_time(ctx, 0,
-                                        &key_data[i]
+                                e.target_idx = get_local_idx(
+                                        i, TestNoteLocalIdxs
                                         .released_at);
+                                add_event(ctx, &e);
                                 key_held_soft[i] = false;
                             }
                         }
@@ -395,15 +431,7 @@ void handle_midi_message(const ubyte[] message) {
                     + message[1];
                 double fraction = value / cast(double)(
                         1 << 14);
-                if (fraction > 0.55) {
-                    shared_data.key_offset = 1;
-                }
-                else if (fraction > 0.45) {
-                    shared_data.key_offset = 0;
-                }
-                else {
-                    shared_data.key_offset = -1;
-                }
+
                 writeln(fraction);
             }
             break;
@@ -436,13 +464,10 @@ void main() {
         }
     }
 
-    for (int i = 0; i < 128; i++) {
-        key_data[i] = TestNoteData.init;
-        key_data[i].pitch_offset_19 = 1;
-        key_data[i].started_at = 0;
-        key_data[i].released_at = 0;
-        key_data[i].shared_data = &shared_data;
-        key_notes[i] = Note(0, &test_note, &key_data[i]);
+    for (int i = 0; i < key_local_idxs.length;
+            i++) {
+        key_local_idxs[i] = get_local_idx(0,
+                TestNoteLocalIdxs.min) + i;
     }
 
     enforce(start_audio(&ctx) == 0);
@@ -451,7 +476,24 @@ void main() {
 
     sample_rate = cast(uint)get_sample_rate(ctx);
 
-    set_tuning();
+    {
+        Event e;
+        e.type = EventType.EVENT_WRITE;
+
+        for (int key_code = 0; key_code < 128;
+                key_code++) {
+            e.target_idx = get_local_idx(key_code,
+                    TestNoteLocalIdxs.pitch_offset_19);
+            e.value = 1;
+            add_event(ctx, &e);
+
+            e.target_idx = get_local_idx(key_code,
+                    TestNoteLocalIdxs.released_at);
+            e.value = reinterpret!double(0uL);
+            add_event(ctx, &e);
+        }
+        set_tuning();
+    }
 
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(

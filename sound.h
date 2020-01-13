@@ -8,32 +8,47 @@ typedef _Bool bool;
 
 #define PI 3.14159265358979323846
 
-// TODO provide start/release times here?
-typedef struct {
-    // TODO do we want to provide this?
-    uint t;
-} NoteInput;
-
 typedef struct {
     uint t;
     uint sample_rate;
-} NoteInputShared;
 
-typedef double (*NoteFn)(
-        const NoteInput*,
-        const NoteInputShared*,
-        bool* expire,
-        const void* /* priv */);
+    double* values;
+} ValueInput;
+
+typedef double (*ValueFn)(
+        const ValueInput* input,
+        const int* local_idxs,
+        bool* expire);
 
 typedef struct {
-    uint id;
+    ValueFn fn;
+    int* local_idxs;
 
-    NoteFn fn;
-    void* priv;
-} Note;
+    int target_idx;
+    int id;
+} ValueSetter;
 
-#define EMPTY_NOTE \
-    (Note) { .id = 0, .fn = NULL }
+#define EMPTY_SETTER \
+    (ValueSetter) { .id = -1, .target_idx = -1, }
+
+typedef enum {
+    EVENT_SETTER,
+    EVENT_WRITE,
+    EVENT_WRITE_TIME,
+} EventType;
+
+typedef struct {
+    EventType type;
+    union {
+        ValueSetter setter;
+        struct {
+            int target_idx;
+            double value;
+        };
+    };
+
+    uint at_count;
+} Event;
 
 typedef struct AudioContext AudioContext;
 
@@ -51,23 +66,7 @@ uint get_sample_rate(AudioContext* ctx);
 // also means the runtime needs to be aware of input
 // dependencies)
 
-// TODO consolidate these by exposing Event
-void event_note(
-        AudioContext* ctx,
-        uint64_t at_count,
-        Note* note);
-
-void event_write(
-        AudioContext* ctx,
-        uint64_t at_count,
-        const void* source,
-        size_t len,
-        void* target);
-
-void event_write_time(
-        AudioContext* ctx,
-        uint64_t at_count,
-        uint* target);
+void add_event(AudioContext* ctx, const Event* event);
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);
