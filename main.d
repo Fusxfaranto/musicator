@@ -211,18 +211,19 @@ extern (C) double test_note(const ValueInput* input,
         // static __gshared double[] ots = [
         //     1.0, 0.5, 0.3
         // ];
-
-        double s = 0;
         double r = 0;
-        for (uint i = 0; i < ots.length; i++) {
-            s += ots[i];
-            // TODO figure out a good way to do this that doesn't have issues with float precision
-            r += ots[i] * tone(
-                    note_input_shared.t - d.started_at,
-                    pitch * cast(double)(i + 1),
-                    note_input_shared.sample_rate);
+        {
+            double s = 0;
+            for (uint i = 0; i < ots.length;
+                    i++) {
+                s += ots[i];
+                // TODO figure out a good way to do this that doesn't have issues with float precision
+                r += ots[i] * tone(input.t - started_at,
+                        pitch * cast(double)(i + 1),
+                        input.sample_rate);
+            }
+            r /= s;
         }
-        r /= s;
     }
     else static if (true) {
         long period = cast(long)round(

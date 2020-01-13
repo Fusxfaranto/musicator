@@ -208,17 +208,15 @@ static long data_cb(
         // event
         uint64_t next_n = process_events(p, n);
 
-        // TODO don't clear every value?
-        // (have some extra per-value state?)
-        for (uint i = 0; i < p->value_buf_size; i++) {
-            if (p->value_state_buf[i] == VALUE_RESET) {
-                p->value_buf[i] = 0;
-            }
-        }
-
         // TODO it'd probably be faster to invert these
         // loops
         for (uint i = 0; i < next_n; i++) {
+            for (uint j = 0; j < p->value_buf_size; j++) {
+                if (p->value_state_buf[j] == VALUE_RESET) {
+                    p->value_buf[j] = 0;
+                }
+            }
+
             bool expire = false;
 
             for (uint setter_idx = 0;
