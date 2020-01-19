@@ -91,7 +91,7 @@ void set_tuning() {
                 enum cents = 100;
                 e.value = 440 * exp2(
                         (key_code - 69) * (cents / 1200.));
-                add_event(ctx, &e);
+                add_event(ctx, 0, &e);
                 break;
             }
 
@@ -141,7 +141,7 @@ void set_tuning() {
 
                 e.value = octave_scale * C * exp2(
                         alt_rel_key / 19.);
-                add_event(ctx, &e);
+                add_event(ctx, 0, &e);
                 break;
             }
 
@@ -178,7 +178,7 @@ void set_tuning() {
                 }
                 e.value = octave_scale * C
                     * intervals[rel_note];
-                add_event(ctx, &e);
+                add_event(ctx, 0, &e);
 
                 break;
             }
@@ -332,7 +332,7 @@ void handle_midi_message(const ubyte[] message) {
                                 midi_note,
                                 TestNoteLocalIdxs.volume);
                         e.value = midi_velocity / 128.;
-                        add_event(ctx, &e);
+                        add_event(ctx, 0, &e);
 
                         e = Event.init;
                         e.type = EventType.EVENT_WRITE_TIME;
@@ -340,7 +340,7 @@ void handle_midi_message(const ubyte[] message) {
                                 midi_note,
                                 TestNoteLocalIdxs
                                 .started_at);
-                        add_event(ctx, &e);
+                        add_event(ctx, 0, &e);
 
                         e = Event.init;
                         e.type = EventType.EVENT_SETTER;
@@ -348,7 +348,7 @@ void handle_midi_message(const ubyte[] message) {
                                 &key_local_idxs[midi_note * (
                                         TestNoteLocalIdxs.max + 1)],
                                 0, get_key_idx(midi_note));
-                        add_event(ctx, &e);
+                        add_event(ctx, 0, &e);
 
                         last_key_held = midi_note;
                     }
@@ -358,7 +358,7 @@ void handle_midi_message(const ubyte[] message) {
                                 midi_note,
                                 TestNoteLocalIdxs
                                 .released_at);
-                        add_event(ctx, &e);
+                        add_event(ctx, 0, &e);
                     }
                     key_held_soft[midi_note] = key_held[midi_note];
                 }
@@ -393,7 +393,7 @@ void handle_midi_message(const ubyte[] message) {
                             e.target_idx = get_local_idx(k,
                                     TestNoteLocalIdxs
                                     .pitch_offset_19);
-                            add_event(ctx, &e);
+                            add_event(ctx, 0, &e);
                         }
                     }
                     break;
@@ -415,7 +415,7 @@ void handle_midi_message(const ubyte[] message) {
                             e.target_idx = get_local_idx(i,
                                     TestNoteLocalIdxs
                                     .pitch_offset_19);
-                            add_event(ctx, &e);
+                            add_event(ctx, 0, &e);
                         }
                         break;
                     }
@@ -433,7 +433,7 @@ void handle_midi_message(const ubyte[] message) {
                                 e.target_idx = get_local_idx(
                                         i, TestNoteLocalIdxs
                                         .released_at);
-                                add_event(ctx, &e);
+                                add_event(ctx, 0, &e);
                                 key_held_soft[i] = false;
                             }
                         }
@@ -462,7 +462,7 @@ void handle_midi_message(const ubyte[] message) {
                 e.type = EventType.EVENT_WRITE;
                 e.value = fraction;
                 e.target_idx = TestGlobals.VIB_AMT;
-                add_event(ctx, &e);
+                add_event(ctx, 0, &e);
             }
             break;
 
@@ -515,12 +515,12 @@ void main() {
             e.target_idx = get_local_idx(key_code,
                     TestNoteLocalIdxs.pitch_offset_19);
             e.value = 1;
-            add_event(ctx, &e);
+            add_event(ctx, 0, &e);
 
             e.target_idx = get_local_idx(key_code,
                     TestNoteLocalIdxs.released_at);
             e.value = reinterpret!double(0uL);
-            add_event(ctx, &e);
+            add_event(ctx, 0, &e);
         }
         set_tuning();
     }
@@ -530,19 +530,19 @@ void main() {
         e.type = EventType.EVENT_WRITE;
         e.value = 0;
         e.target_idx = TestGlobals.VIB_AMT;
-        add_event(ctx, &e);
+        add_event(ctx, 0, &e);
 
         e = Event.init;
         e.type = EventType.EVENT_WRITE;
         e.value = 2 * PI * 0.7;
         e.target_idx = TestGlobals.VIB_FREQ;
-        add_event(ctx, &e);
+        add_event(ctx, 0, &e);
 
         e = Event.init;
         e.type = EventType.EVENT_SETTER;
         e.setter = ValueSetter(&test_vib_func, null,
                 TestGlobals.VIB_F, TestGlobals.VIB_F);
-        add_event(ctx, &e);
+        add_event(ctx, 0, &e);
     }
 
     enum midi_queue_size = 4096;

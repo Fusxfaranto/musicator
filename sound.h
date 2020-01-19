@@ -66,7 +66,7 @@ uint get_sample_rate(AudioContext* ctx);
 // also means the runtime needs to be aware of input
 // dependencies)
 
-void add_event(AudioContext* ctx, const Event* event);
+void add_event(AudioContext* ctx, uint stream_id, const Event* event);
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);

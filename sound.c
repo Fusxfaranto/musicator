@@ -46,7 +46,7 @@ typedef enum {
 
 typedef struct {
     uint64_t c;
-    uint sample_rate;
+    // TODO remove?
     double volume;
 
     ValueSetter* setter_buf;
@@ -61,10 +61,14 @@ typedef struct {
     uint event_buf_size;
     uint event_pos;
     atomic_uint_fast32_t event_reserved_pos;
-} StreamPriv;
+} StreamData;
 
 typedef struct AudioContext {
-    StreamPriv priv;
+    StreamData* stream_data_buf;
+    uint stream_data_buf_size;
+
+    uint sample_rate;
+
     cubeb_stream* stream;
     cubeb* ctx;
 } AudioContext;
@@ -81,25 +85,28 @@ double low_pass_filter(
 }
 
 uint get_sample_rate(AudioContext* ctx) {
-    return ctx->priv.sample_rate;
+    return ctx->sample_rate;
 }
 
 // TODO control lock to make these thread safe?
-void add_event(AudioContext* ctx, const Event* e) {
-    StreamPriv* p = &ctx->priv;
+void add_event(
+        AudioContext* ctx,
+        uint stream_id,
+        const Event* e) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
 
     uint event_idx = atomic_inc_mod(
             &p->event_reserved_pos, p->event_buf_size);
     // TODO figure out what to actually do here, for
     // scrubbing purposes wrapping isn't really what we want
-    //assert(event_idx != p->event_buf_size - 1);
+    // assert(event_idx != p->event_buf_size - 1);
     p->event_buf[event_idx] = *e;
 
     assert(!atomic_load(&p->event_ready[event_idx]));
     atomic_store(&p->event_ready[event_idx], true);
 }
 
-static uint process_events(StreamPriv* p, uint64_t n) {
+static uint process_events(StreamData* p, uint64_t n) {
     uint next_n;
     uint64_t end = p->c + n;
 
@@ -186,24 +193,16 @@ static uint process_events(StreamPriv* p, uint64_t n) {
     }
 }
 
-static long data_cb(
-        cubeb_stream* stm,
-        void* user,
-        const void* in_s,
-        void* out_s,
-        long n_signed) {
-    (void)stm;
-    (void)in_s;
-
-    StreamPriv* p = user;
-
-    float* out = out_s;
-    uint64_t n = (uint64_t)n_signed;
+static void generate_samples(
+        StreamData* p,
+        float* out,
+        uint64_t n,
+        uint sample_rate) {
     uint64_t end = p->c + n;
 
     ValueInput value_input = (ValueInput){
             .t = p->c,
-            .sample_rate = p->sample_rate,
+            .sample_rate = sample_rate,
             .values = p->value_buf,
     };
 
@@ -215,6 +214,8 @@ static long data_cb(
         // TODO it'd probably be faster to invert these
         // loops
         for (uint i = 0; i < next_n; i++) {
+            // TODO if i want to support a large number of
+            // values, this needs to be done differently
             for (uint j = 0; j < p->value_buf_size; j++) {
                 if (p->value_state_buf[j] == VALUE_RESET) {
                     p->value_buf[j] = 0;
@@ -245,13 +246,15 @@ static long data_cb(
                 }
             }
 
+            // TODO don't hardcode "special" value_buf idxs,
+            // throw them in an enum or something
             double r = p->value_buf[0];
             r *= p->volume;
 
             // TODO stereo
             // TODO use integer samples instead of float?
             for (uint c = 0; c < 2; c++) {
-                out[2 * i + c] = (float)r;
+                out[2 * i + c] += (float)r;
             }
 
             value_input.t++;
@@ -267,6 +270,37 @@ static long data_cb(
     }
 
     p->c = end;
+}
+
+static long data_cb(
+        cubeb_stream* stm,
+        void* user,
+        const void* in_s,
+        void* out_s,
+        long n_signed) {
+    (void)stm;
+    (void)in_s;
+
+    AudioContext* ctx = user;
+
+    float* out = out_s;
+    uint64_t n = (uint64_t)n_signed;
+
+    for (uint i = 0; i < n; i++) {
+        for (uint c = 0; c < 2; c++) {
+            out[2 * i + c] = 0;
+        }
+    }
+
+    for (uint i = 0; i < ctx->stream_data_buf_size; i++) {
+        // TODO per-stream pause state
+        generate_samples(
+                &(ctx->stream_data_buf[i]),
+                out,
+                n,
+                ctx->sample_rate);
+    }
+
     return n_signed;
 }
 
@@ -277,17 +311,14 @@ state_cb(cubeb_stream* stm, void* user, cubeb_state state) {
     (void)state;
 }
 
-static void init_stream_priv(
-        StreamPriv* p,
-        uint sample_rate) {
+static void init_stream_data(StreamData* p) {
     // TODO
     uint ebl = 4096;
     uint nbl = 64;
-    uint value_num = 4096;
+    uint value_num = 1024;
 
-    *p = (StreamPriv){
+    *p = (StreamData){
             .c = 0,
-            .sample_rate = sample_rate,
             .volume = 1.0,
 
             .setter_buf = malloc(sizeof(ValueSetter) * nbl),
@@ -330,6 +361,7 @@ int start_audio(AudioContext** ctx) {
 
     CHECK_CUBEB(cubeb_get_preferred_sample_rate(
             (*ctx)->ctx, &sample_rate));
+    (*ctx)->sample_rate = sample_rate;
     printf("sample rate %u\n", sample_rate);
 
     output_params.format = CUBEB_SAMPLE_FLOAT32NE;
@@ -342,7 +374,13 @@ int start_audio(AudioContext** ctx) {
             (*ctx)->ctx, &output_params, &latency_frames));
     printf("latency frames %u\n", latency_frames);
 
-    init_stream_priv(&((*ctx)->priv), sample_rate);
+    uint n_stream_data = 2;
+    (*ctx)->stream_data_buf =
+            malloc(sizeof(StreamData) * n_stream_data);
+    (*ctx)->stream_data_buf_size = n_stream_data;
+    for (uint i = 0; i < n_stream_data; i++) {
+        init_stream_data(&((*ctx)->stream_data_buf[i]));
+    }
 
     CHECK_CUBEB(cubeb_stream_init(
             (*ctx)->ctx,
@@ -355,7 +393,7 @@ int start_audio(AudioContext** ctx) {
             latency_frames,
             data_cb,
             state_cb,
-            &((*ctx)->priv)));
+            *ctx));
     CHECK_CUBEB(cubeb_stream_start((*ctx)->stream));
 
     return 0;
