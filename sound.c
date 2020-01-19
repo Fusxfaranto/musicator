@@ -84,11 +84,15 @@ uint get_sample_rate(AudioContext* ctx) {
     return ctx->priv.sample_rate;
 }
 
+// TODO control lock to make these thread safe?
 void add_event(AudioContext* ctx, const Event* e) {
     StreamPriv* p = &ctx->priv;
 
     uint event_idx = atomic_inc_mod(
             &p->event_reserved_pos, p->event_buf_size);
+    // TODO figure out what to actually do here, for
+    // scrubbing purposes wrapping isn't really what we want
+    //assert(event_idx != p->event_buf_size - 1);
     p->event_buf[event_idx] = *e;
 
     assert(!atomic_load(&p->event_ready[event_idx]));

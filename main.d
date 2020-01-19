@@ -42,6 +42,12 @@ enum TestNoteLocalIdxs {
     released_at,
 }
 
+enum TestGlobals : int {
+    VIB_AMT = 1,
+    VIB_FREQ,
+    VIB_F,
+}
+
 __gshared {
     AudioContext* ctx;
     int[128 * (TestNoteLocalIdxs.max + 1)] key_local_idxs;
@@ -62,7 +68,8 @@ int get_key_idx(int keycode) {
 
 int get_local_idx(int keycode, TestNoteLocalIdxs local) {
     // TODO ??
-    return 5 + keycode * (TestNoteLocalIdxs.max + 1) + local;
+    return TestGlobals.max + 1 + keycode * (
+            TestNoteLocalIdxs.max + 1) + local;
 }
 
 void set_tuning() {
@@ -203,7 +210,7 @@ extern (C) double test_note(const ValueInput* input,
         pitch *= pitch_offset_19;
     }
 
-    static if (false) {
+    static if (true) {
         static __gshared double[] ots = [
             1.0, 1.0, 0.5, 0.6, 0.4, 0.3,
             0.2, 0.2, 0.1, 0.1, 0.1,
@@ -243,6 +250,11 @@ extern (C) double test_note(const ValueInput* input,
     else {
         double r = tone(note_input_shared.t, pitch,
                 note_input_shared.sample_rate);
+    }
+
+    if (true) {
+        double vib = input.values[TestGlobals.VIB_F];
+        r *= vib;
     }
 
     // TODO try a fancier envelope
@@ -289,6 +301,14 @@ extern (C) double test_note(const ValueInput* input,
     r *= volume;
 
     return r;
+}
+
+extern (C) double test_vib_func(const ValueInput* input,
+        const int* local_idxs, bool* expire) {
+    double amt = input.values[TestGlobals.VIB_AMT];
+    double freq = input.values[TestGlobals.VIB_FREQ];
+    double v = tone(input.t, freq, input.sample_rate) ^^ 2;
+    return amt * v + (1 - amt);
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -421,27 +441,36 @@ void handle_midi_message(const ubyte[] message) {
                     break;
 
                 default:
+                    writefln(
+                            "unknown controller %s, value %s",
+                            controller, value);
                     break;
                 }
                 break;
             }
 
         case 0b11100000:
-            if (false) {
+            if (true) {
                 ushort value = (message[2] << 7)
                     + message[1];
                 double fraction = value / cast(double)(
                         1 << 14);
 
                 writeln(fraction);
+
+                Event e;
+                e.type = EventType.EVENT_WRITE;
+                e.value = fraction;
+                e.target_idx = TestGlobals.VIB_AMT;
+                add_event(ctx, &e);
             }
             break;
 
         default:
-            //writefln("%s", message);
+            writefln("%b: %s", upper, message);
             break;
         }
-        writefln("%b: %s", upper, message);
+        //writefln("%b: %s", upper, message);
     }
     else {
         Thread.sleep(dur!"msecs"(10));
@@ -494,6 +523,26 @@ void main() {
             add_event(ctx, &e);
         }
         set_tuning();
+    }
+
+    {
+        Event e;
+        e.type = EventType.EVENT_WRITE;
+        e.value = 0;
+        e.target_idx = TestGlobals.VIB_AMT;
+        add_event(ctx, &e);
+
+        e = Event.init;
+        e.type = EventType.EVENT_WRITE;
+        e.value = 2 * PI * 0.7;
+        e.target_idx = TestGlobals.VIB_FREQ;
+        add_event(ctx, &e);
+
+        e = Event.init;
+        e.type = EventType.EVENT_SETTER;
+        e.setter = ValueSetter(&test_vib_func, null,
+                TestGlobals.VIB_F, TestGlobals.VIB_F);
+        add_event(ctx, &e);
     }
 
     enum midi_queue_size = 4096;
