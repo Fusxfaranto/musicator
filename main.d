@@ -420,6 +420,16 @@ void handle_midi_message(const ubyte[] message) {
                         break;
                     }
 
+                case 24:
+                    if (value > 63) {
+                        writeln("scrubbing to 1");
+                        Event e;
+                        e.type = EventType.EVENT_RESET_STREAM;
+                        e.to_count = 1;
+                        add_event(ctx, 0, &e);
+                    }
+                    break;
+
                 case 64:
                     midi_suspend = value > 63;
                     writefln("suspend %s", midi_suspend);

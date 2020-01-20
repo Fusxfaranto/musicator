@@ -35,6 +35,7 @@ typedef enum {
     EVENT_SETTER,
     EVENT_WRITE,
     EVENT_WRITE_TIME,
+    EVENT_RESET_STREAM,
 } EventType;
 
 typedef struct {
@@ -45,6 +46,7 @@ typedef struct {
             int target_idx;
             double value;
         };
+        uint to_count;
     };
 
     uint at_count;

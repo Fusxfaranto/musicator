@@ -21,28 +21,42 @@
 #define CHECK_CUBEB(x) CHECK(x, CUBEB_OK)
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
 
-#define ATOMIC_INC_MOD_FUNC(T)                    \
-    T atomic_inc_mod_##T(_Atomic(T) * p, T m) {   \
-        for (;;) {                                \
-            T expected = atomic_load(p);          \
-            T next = (expected + 1) % m;          \
-            bool cas_succeed =                    \
-                    atomic_compare_exchange_weak( \
-                            p, &expected, next);  \
-            if (cas_succeed) {                    \
-                return expected;                  \
-            }                                     \
-        }                                         \
-    }                                             \
+#define ATOMIC_OP_MOD_FUNC(T, NAME, VAL)             \
+    T atomic_##NAME##_mod_##T(_Atomic(T) * p, T m) { \
+        for (;;) {                                   \
+            T expected = atomic_load(p);             \
+            T next = (expected + (VAL)) % m;         \
+            bool cas_succeed =                       \
+                    atomic_compare_exchange_weak(    \
+                            p, &expected, next);     \
+            if (cas_succeed) {                       \
+                return expected;                     \
+            }                                        \
+        }                                            \
+    }                                                \
     struct __swallow_semicolon_
+
+#define ATOMIC_INC_MOD_FUNC(T) ATOMIC_OP_MOD_FUNC(T, inc, 1)
+#define ATOMIC_DEC_MOD_FUNC(T) \
+    ATOMIC_OP_MOD_FUNC(T, dec, m - 1)
 ATOMIC_INC_MOD_FUNC(uint_fast32_t);
+ATOMIC_DEC_MOD_FUNC(uint_fast32_t);
 // TODO _Generic?
 #define atomic_inc_mod atomic_inc_mod_uint_fast32_t
+#define atomic_dec_mod atomic_dec_mod_uint_fast32_t
 
+// TODO replace this with a refcount of # of fns actively
+// modifying?
 typedef enum {
     VALUE_KEEP,
     VALUE_RESET,
 } ValueState;
+
+typedef enum {
+    EVENT_STATE_UNINITIALIZED,
+    EVENT_STATE_READY,
+    EVENT_STATE_PROCESSED,
+} EventState;
 
 typedef struct {
     uint64_t c;
@@ -57,7 +71,7 @@ typedef struct {
     uint value_buf_size;
 
     Event* event_buf;
-    atomic_bool* event_ready;
+    _Atomic(EventState) * event_state_buf;
     uint event_buf_size;
     uint event_pos;
     atomic_uint_fast32_t event_reserved_pos;
@@ -95,6 +109,8 @@ void add_event(
         const Event* e) {
     StreamData* p = &(ctx->stream_data_buf[stream_id]);
 
+    // TODO in pathological scenarios, this can start
+    // clobbering unprocessed events
     uint event_idx = atomic_inc_mod(
             &p->event_reserved_pos, p->event_buf_size);
     // TODO figure out what to actually do here, for
@@ -102,8 +118,46 @@ void add_event(
     // assert(event_idx != p->event_buf_size - 1);
     p->event_buf[event_idx] = *e;
 
-    assert(!atomic_load(&p->event_ready[event_idx]));
-    atomic_store(&p->event_ready[event_idx], true);
+    EventState old_state = atomic_exchange(
+            &p->event_state_buf[event_idx],
+            EVENT_STATE_READY);
+    assert(old_state != EVENT_STATE_READY);
+}
+
+static void scrub_stream(StreamData* p, uint to_count) {
+    p->c = to_count;
+    for (;;) {
+        uint prev_event_pos =
+                (p->event_pos + (p->event_buf_size - 1)) %
+                p->event_buf_size;
+        EventState event_state = atomic_load(
+                &p->event_state_buf[prev_event_pos]);
+        if (event_state == EVENT_STATE_UNINITIALIZED) {
+            return;
+        }
+
+        // TODO this can probably happen?  figure it out
+        // later
+        assert(event_state == EVENT_STATE_PROCESSED);
+
+        Event* e = &p->event_buf[prev_event_pos];
+
+        if (e->at_count < to_count) {
+            return;
+        }
+
+        bool cas_succeed = atomic_compare_exchange_strong(
+                &p->event_state_buf[prev_event_pos],
+                &event_state,
+                EVENT_STATE_READY);
+        if (!cas_succeed) {
+            // TODO ???
+            assert(0);
+            continue;
+        }
+
+        p->event_pos = prev_event_pos;
+    }
 }
 
 static uint process_events(StreamData* p, uint64_t n) {
@@ -111,13 +165,16 @@ static uint process_events(StreamData* p, uint64_t n) {
     uint64_t end = p->c + n;
 
     for (;;) {
-        if (!atomic_load(&p->event_ready[p->event_pos])) {
+        if (atomic_load(
+                    &p->event_state_buf[p->event_pos]) !=
+            EVENT_STATE_READY) {
             return n;
         }
 
         Event* e = &p->event_buf[p->event_pos];
         if (e->at_count < p->c) {
-            // event "in the past" (process it now)
+            // event "in the past" (process it now, and
+            // retroactively update its timestamp)
             e->at_count = p->c;
         }
         if (e->at_count < end) {
@@ -185,8 +242,26 @@ static uint process_events(StreamData* p, uint64_t n) {
             *(uint*)(&p->value_buf[e->target_idx]) = p->c;
             break;
         }
+
+        case EVENT_RESET_STREAM: {
+            // TODO add some sort of conditional
+            // functionality here, to prevent every scrub
+            // from being an infinite loop?
+            // (but that might be bad from a reproducibility
+            // standpoint)
+            scrub_stream(p, e->to_count);
+
+            // since this modifies p->event_pos, need to
+            // just return here
+            return 0;
         }
-        atomic_store(&p->event_ready[p->event_pos], false);
+
+        default:
+            assert(0);
+        }
+        atomic_store(
+                &p->event_state_buf[p->event_pos],
+                EVENT_STATE_PROCESSED);
 
         p->event_pos =
                 (p->event_pos + 1) % p->event_buf_size;
@@ -198,7 +273,7 @@ static void generate_samples(
         float* out,
         uint64_t n,
         uint sample_rate) {
-    uint64_t end = p->c + n;
+    uint n_generated = 0;
 
     ValueInput value_input = (ValueInput){
             .t = p->c,
@@ -209,7 +284,7 @@ static void generate_samples(
     for (;;) {
         // num samples to calculate until processing next
         // event
-        uint64_t next_n = process_events(p, n);
+        uint64_t next_n = process_events(p, n - n_generated);
 
         // TODO it'd probably be faster to invert these
         // loops
@@ -224,6 +299,8 @@ static void generate_samples(
 
             bool expire = false;
 
+            // TODO have a more explicit ordering scheme
+            // than this?
             for (uint setter_idx = 0;
                  setter_idx < p->setter_buf_size;
                  setter_idx++) {
@@ -260,16 +337,15 @@ static void generate_samples(
             value_input.t++;
         }
 
+        n_generated += next_n;
         p->c += next_n;
         out += 2 * next_n;
 
-        if (p->c == end) {
+        if (n_generated == n) {
             break;
         }
-        assert(p->c < end);
+        assert(n_generated < n);
     }
-
-    p->c = end;
 }
 
 static long data_cb(
@@ -313,12 +389,12 @@ state_cb(cubeb_stream* stm, void* user, cubeb_state state) {
 
 static void init_stream_data(StreamData* p) {
     // TODO
-    uint ebl = 4096;
+    uint ebl = 1024 * 64;
     uint nbl = 64;
     uint value_num = 1024;
 
     *p = (StreamData){
-            .c = 0,
+            .c = 1,
             .volume = 1.0,
 
             .setter_buf = malloc(sizeof(ValueSetter) * nbl),
@@ -330,7 +406,8 @@ static void init_stream_data(StreamData* p) {
             .value_buf_size = value_num,
 
             .event_buf = malloc(sizeof(Event) * ebl),
-            .event_ready = malloc(sizeof(bool) * ebl),
+            .event_state_buf = malloc(
+                    sizeof(_Atomic(EventState)) * ebl),
             .event_buf_size = ebl,
     };
 
@@ -345,7 +422,9 @@ static void init_stream_data(StreamData* p) {
     }
 
     for (uint i = 0; i < ebl; i++) {
-        atomic_store(&p->event_ready[i], false);
+        atomic_store(
+                &p->event_state_buf[i],
+                EVENT_STATE_UNINITIALIZED);
     }
     atomic_store(&p->event_pos, 0);
     atomic_store(&p->event_reserved_pos, 0);
