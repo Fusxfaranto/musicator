@@ -5,3 +5,4 @@ main
 *.a
 out/*
 c_bindings.d
+tcc/*

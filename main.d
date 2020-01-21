@@ -6,6 +6,7 @@ import std.math : exp2, log2, PI, pow,
     round, fmod, _sin = sin;
 import std.process : executeShell;
 import std.stdio : writeln, writefln;
+import std.string : fromStringz;
 
 import core.stdc.string : strlen;
 import core.thread : Thread;
@@ -15,6 +16,7 @@ import util;
 import c_bindings;
 
 import rtmidi_c;
+import tcc.libtcc;
 
 alias fast_float_type = float;
 fast_float_type sin(fast_float_type f) {
@@ -51,6 +53,8 @@ enum TestGlobals : int {
 __gshared {
     AudioContext* ctx;
     int[128 * (TestNoteLocalIdxs.max + 1)] key_local_idxs;
+
+    ValueFn note_fn;
 
     bool[128] key_held = false;
     bool[128] key_held_soft = false;
@@ -344,7 +348,7 @@ void handle_midi_message(const ubyte[] message) {
 
                         e = Event.init;
                         e.type = EventType.EVENT_SETTER;
-                        e.setter = ValueSetter(&test_note,
+                        e.setter = ValueSetter(note_fn,
                                 &key_local_idxs[midi_note * (
                                         TestNoteLocalIdxs.max + 1)],
                                 0, get_key_idx(midi_note));
@@ -424,7 +428,8 @@ void handle_midi_message(const ubyte[] message) {
                     if (value > 63) {
                         writeln("scrubbing to 1");
                         Event e;
-                        e.type = EventType.EVENT_RESET_STREAM;
+                        e.type
+                            = EventType.EVENT_RESET_STREAM;
                         e.to_count = 1;
                         add_event(ctx, 0, &e);
                     }
@@ -487,6 +492,11 @@ void handle_midi_message(const ubyte[] message) {
     }
 }
 
+extern (C) void tcc_error_func(void* opaque, const char* msg) {
+    writeln(fromStringz(msg));
+    assert(0);
+}
+
 void main() {
     int[128] white_keys_map;
     {
@@ -509,6 +519,40 @@ void main() {
         key_local_idxs[i] = get_local_idx(0,
                 TestNoteLocalIdxs.min) + i;
     }
+
+    TCCState* tcc_state = tcc_new();
+    scope (exit)
+        tcc_delete(tcc_state);
+    tcc_set_error_func(tcc_state, null, &tcc_error_func);
+    enforce(tcc_set_output_type(tcc_state,
+            TCC_OUTPUT_MEMORY) == 0);
+    tcc_set_lib_path(tcc_state, "tcc");
+    enforce(tcc_add_library(tcc_state, "m") == 0);
+    //enforce(tcc_add_include_path(tcc_state, "cubeb/include") == 0);
+    enforce(tcc_add_sysinclude_path(tcc_state,
+            "tcc/include") == 0);
+
+    enforce(tcc_compile_string(tcc_state, `
+#include "sound.h"
+#include "math.h"
+
+double note(
+        const ValueInput* input,
+        const int* local_idxs,
+        bool* expire) {
+uint64_t started_at = 0;
+double pitch = 440;
+uint64_t period = (uint64_t)round(
+                input->sample_rate / pitch);
+double r = (input->t - started_at) % period >= period / 2 ? 1.0 : -1.0;
+
+return r;
+}
+`) == 0);
+
+    tcc_relocate(tcc_state, TCC_RELOCATE_AUTO);
+    note_fn = cast(ValueFn)tcc_get_symbol(tcc_state, "note");
+    enforce(note_fn);
 
     enforce(start_audio(&ctx) == 0);
     scope (exit)
@@ -548,11 +592,37 @@ void main() {
         e.target_idx = TestGlobals.VIB_FREQ;
         add_event(ctx, 0, &e);
 
-        e = Event.init;
-        e.type = EventType.EVENT_SETTER;
-        e.setter = ValueSetter(&test_vib_func, null,
-                TestGlobals.VIB_F, TestGlobals.VIB_F);
-        add_event(ctx, 0, &e);
+        if (false) {
+            e = Event.init;
+            e.type = EventType.EVENT_SETTER;
+            e.setter = ValueSetter(&test_vib_func, null,
+                    TestGlobals.VIB_F, TestGlobals.VIB_F);
+            add_event(ctx, 0, &e);
+        }
+        else {
+            e = Event.init;
+            e.type = EventType.EVENT_WRITE;
+            e.value = 1;
+            e.target_idx = TestGlobals.VIB_F;
+            add_event(ctx, 0, &e);
+        }
+    }
+
+    version (none) {
+        import std.json : JSONValue, parseJSON;
+
+        JSONValue j = parseJSON(`
+[
+{
+"type": "EVENT_SETTER",
+"setter": {
+"fn": "test_note",
+
+},
+"at_count": 0
+}
+]
+`);
     }
 
     enum midi_queue_size = 4096;

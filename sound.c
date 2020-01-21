@@ -1,5 +1,5 @@
 
-#include "sound.h"
+#include "cubeb/cubeb.h"
 
 #include <assert.h>
 #include <math.h>
@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "sound.h"
+
 #define false ((bool)0)
 #define true ((bool)1)
 
@@ -124,7 +127,7 @@ void add_event(
     assert(old_state != EVENT_STATE_READY);
 }
 
-static void scrub_stream(StreamData* p, uint to_count) {
+static void jump_stream(StreamData* p, uint to_count) {
     p->c = to_count;
     for (;;) {
         uint prev_event_pos =
@@ -249,7 +252,7 @@ static uint process_events(StreamData* p, uint64_t n) {
             // from being an infinite loop?
             // (but that might be bad from a reproducibility
             // standpoint)
-            scrub_stream(p, e->to_count);
+            jump_stream(p, e->to_count);
 
             // since this modifies p->event_pos, need to
             // just return here

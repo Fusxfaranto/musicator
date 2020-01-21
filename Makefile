@@ -37,6 +37,7 @@ LDFLAGS += -L=-Llib -L=-Lout
 LDFLAGS += -L=-lm
 LDFLAGS += -L=-lstdc++
 LDFLAGS += -L=-lasound -L=-lpthread
+LDFLAGS += -L=-Ltcc -L=-l:libtcc.a
 
 RTMIDI_OBJS := out/rtmidi/rtmidi.o out/rtmidi/rtmidi_c.o
 
