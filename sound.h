@@ -6,13 +6,21 @@
 typedef uint64_t uint;
 typedef _Bool bool;
 
+const bool false = 0;
+const bool true = 1;
+
 #define PI 3.14159265358979323846
+
+typedef union {
+    double d;
+    uint64_t u;
+} Value;
 
 typedef struct {
     uint t;
     uint sample_rate;
 
-    double* values;
+    Value* values;
 } ValueInput;
 
 typedef double (*ValueFn)(
@@ -44,7 +52,7 @@ typedef struct {
         ValueSetter setter;
         struct {
             int target_idx;
-            double value;
+            Value value;
         };
         uint to_count;
     };
@@ -61,7 +69,14 @@ uint get_sample_rate(AudioContext* ctx);
 // also means the runtime needs to be aware of input
 // dependencies)
 
-void add_event(AudioContext* ctx, uint stream_id, const Event* event);
+int get_name_idx(
+        AudioContext* ctx,
+        uint stream_id,
+        const char* name);
+void add_event(
+        AudioContext* ctx,
+        uint stream_id,
+        const Event* event);
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);

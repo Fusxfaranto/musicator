@@ -1,5 +1,5 @@
 
-#include "cubeb/cubeb.h"
+#include "sound.h"
 
 #include <assert.h>
 #include <math.h>
@@ -8,10 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "sound.h"
-
-#define false ((bool)0)
-#define true ((bool)1)
+#include "cubeb/cubeb.h"
 
 #define CHECK(x, v)                                  \
     {                                                \
@@ -66,11 +63,17 @@ typedef struct {
     // TODO remove?
     double volume;
 
+    struct {
+        const char* name;
+        int id;
+    } * name_buf;
+
     ValueSetter* setter_buf;
     uint setter_buf_size;
 
-    double* value_buf;
+    Value* value_buf;
     ValueState* value_state_buf;
+    char** value_name_buf;
     uint value_buf_size;
 
     Event* event_buf;
@@ -125,6 +128,36 @@ void add_event(
             &p->event_state_buf[event_idx],
             EVENT_STATE_READY);
     assert(old_state != EVENT_STATE_READY);
+}
+
+// TODO this particularly super unthreadsafe, but that's
+// fine for now as long as the stream thread never touches
+// names
+int get_name_idx(
+        AudioContext* ctx,
+        uint stream_id,
+        const char* name) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
+
+    for (int i = 0; i < (int)p->value_buf_size; i++) {
+        if (p->value_name_buf[i] &&
+            strcmp(p->value_name_buf[i], name) == 0) {
+            return i;
+        }
+    }
+
+    for (int i = 0; i < (int)p->value_buf_size; i++) {
+        if (!p->value_name_buf[i]) {
+            size_t l = strlen(name);
+            p->value_name_buf[i] = malloc(l + 1);
+            strcpy(p->value_name_buf[i], name);
+            return i;
+        }
+    }
+
+    // TODO
+    assert(0);
+    return -1;
 }
 
 static void jump_stream(StreamData* p, uint to_count) {
@@ -287,7 +320,8 @@ static void generate_samples(
     for (;;) {
         // num samples to calculate until processing next
         // event
-        uint64_t next_n = process_events(p, n - n_generated);
+        uint64_t next_n =
+                process_events(p, n - n_generated);
 
         // TODO it'd probably be faster to invert these
         // loops
@@ -296,7 +330,7 @@ static void generate_samples(
             // values, this needs to be done differently
             for (uint j = 0; j < p->value_buf_size; j++) {
                 if (p->value_state_buf[j] == VALUE_RESET) {
-                    p->value_buf[j] = 0;
+                    p->value_buf[j].u = 0;
                 }
             }
 
@@ -308,10 +342,12 @@ static void generate_samples(
                  setter_idx < p->setter_buf_size;
                  setter_idx++) {
                 if (p->setter_buf[setter_idx].fn) {
+                    // TODO non-floating setter targets?
                     double* target =
                             &p->value_buf
                                      [p->setter_buf[setter_idx]
-                                              .target_idx];
+                                              .target_idx]
+                                             .d;
                     *target += p->setter_buf[setter_idx].fn(
                             &value_input,
                             p->setter_buf[setter_idx]
@@ -328,7 +364,7 @@ static void generate_samples(
 
             // TODO don't hardcode "special" value_buf idxs,
             // throw them in an enum or something
-            double r = p->value_buf[0];
+            double r = p->value_buf[0].d;
             r *= p->volume;
 
             // TODO stereo
@@ -406,6 +442,8 @@ static void init_stream_data(StreamData* p) {
             .value_buf = malloc(sizeof(double) * value_num),
             .value_state_buf =
                     malloc(sizeof(ValueState) * value_num),
+            .value_name_buf =
+                    malloc(sizeof(char*) * value_num),
             .value_buf_size = value_num,
 
             .event_buf = malloc(sizeof(Event) * ebl),
@@ -415,10 +453,12 @@ static void init_stream_data(StreamData* p) {
     };
 
     for (uint i = 0; i < value_num; i++) {
-        p->value_buf[i] = NAN;
+        p->value_buf[i].d = NAN;
         p->value_state_buf[i] = VALUE_KEEP;
+        p->value_name_buf[i] = NULL;
     }
     p->value_state_buf[0] = VALUE_RESET;
+    p->value_name_buf[0] = "out";
 
     for (uint i = 0; i < nbl; i++) {
         p->setter_buf[i] = EMPTY_SETTER;
