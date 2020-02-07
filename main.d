@@ -48,7 +48,7 @@ __gshared {
     int[12] key_pitch_offset_19;
     int last_key_held;
     bool midi_suspend = false;
-    Tuning tuning = Tuning.ET19;
+    Tuning tuning = Tuning.ET12;
 
     uint sample_rate;
 }
@@ -378,23 +378,33 @@ void handle_midi_message(const ubyte[] message) {
                 double fraction = value / 127.;
                 switch (controller) {
                 case 1:
-                    if (tuning == Tuning.ET19) {
-                        int p;
-                        if (fraction < 1 / 3.) {
-                            p = -1;
+                    if (false) {
+                        if (tuning == Tuning.ET19) {
+                            int p;
+                            if (fraction < 1 / 3.) {
+                                p = -1;
+                            }
+                            else if (fraction < 2 / 3.) {
+                                p = 0;
+                            }
+                            else {
+                                p = 1;
+                            }
+                            key_pitch_offset_19[last_key_held % 12] = p;
+                            for (int k = last_key_held % 12;
+                                    k < 128;
+                                    k += 12) {
+                                set_tuning(k);
+                            }
                         }
-                        else if (fraction < 2 / 3.) {
-                            p = 0;
-                        }
-                        else {
-                            p = 1;
-                        }
-                        key_pitch_offset_19[last_key_held
-                            % 12] = p;
-                        for (int k = last_key_held % 12;
-                                k < 128; k += 12) {
-                            set_tuning(k);
-                        }
+                    }
+                    else {
+                        Event e;
+                        e.type = EventType.EVENT_WRITE;
+                        e.value.d = fraction;
+                        e.target_idx = get_name_idx(ctx, 0,
+                                "fm_freq".ptr);
+                        add_event(ctx, 0, &e);
                     }
                     break;
 
@@ -464,20 +474,17 @@ void handle_midi_message(const ubyte[] message) {
             }
 
         case 0b11100000:
-            version (none) {
-                ushort value = (message[2] << 7)
-                    + message[1];
-                double fraction = value / cast(double)(
-                        1 << 14);
+            ushort value = (message[2] << 7) + message[1];
+            double fraction = value / cast(double)(1 << 14);
 
-                writeln(fraction);
+            writeln(fraction);
 
-                Event e;
-                e.type = EventType.EVENT_WRITE;
-                e.value.d = fraction;
-                e.target_idx = TestGlobals.VIB_AMT;
-                add_event(ctx, 0, &e);
-            }
+            Event e;
+            e.type = EventType.EVENT_WRITE;
+            e.value.d = fraction;
+            e.target_idx = get_name_idx(ctx,
+                    0, "fm_mod".ptr);
+            add_event(ctx, 0, &e);
             break;
 
         default:
@@ -554,13 +561,23 @@ void main() {
                 "started_at",
                 "released_at",
             ];
+        enum string[] global_names = [
+                "fm_mod", "fm_freq",
+            ];
         assert(key_local_idxs.length == 128);
         for (int i = 0; i < 128; i++) {
-            key_local_idxs[i] = new int[local_names.length];
+            key_local_idxs[i] = new int[local_names.length
+                + global_names.length];
             static foreach (j, name; local_names) {
                 key_local_idxs[i][j] = get_name_idx(ctx, 0,
                         format("test_note%s.%s", i, name)
                         .ptr);
+            }
+
+            auto offset = local_names.length;
+            static foreach (j, name; global_names) {
+                key_local_idxs[i][j + offset] = get_name_idx(
+                        ctx, 0, format("%s", name).ptr);
             }
         }
     }
@@ -587,33 +604,16 @@ void main() {
         }
     }
 
-    static if (false) {
+    {
         Event e;
         e.type = EventType.EVENT_WRITE;
-        e.value = 0;
-        e.target_idx = TestGlobals.VIB_AMT;
+        e.value.d = 0.5;
+        e.target_idx = get_name_idx(ctx, 0, "fm_mod".ptr);
         add_event(ctx, 0, &e);
 
-        e = Event.init;
-        e.type = EventType.EVENT_WRITE;
-        e.value = 2 * PI * 0.7;
-        e.target_idx = TestGlobals.VIB_FREQ;
+        e.value.d = 0.5;
+        e.target_idx = get_name_idx(ctx, 0, "fm_freq".ptr);
         add_event(ctx, 0, &e);
-
-        if (false) {
-            e = Event.init;
-            e.type = EventType.EVENT_SETTER;
-            e.setter = ValueSetter(&test_vib_func, null,
-                    TestGlobals.VIB_F, TestGlobals.VIB_F);
-            add_event(ctx, 0, &e);
-        }
-        else {
-            e = Event.init;
-            e.type = EventType.EVENT_WRITE;
-            e.value = 1;
-            e.target_idx = TestGlobals.VIB_F;
-            add_event(ctx, 0, &e);
-        }
     }
 
     version (none) {
