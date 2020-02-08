@@ -6,3 +6,4 @@ main
 out/*
 c_bindings.d
 tcc/*
+*#*#
