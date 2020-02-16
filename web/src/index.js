@@ -1,3 +1,5 @@
+// -*- mode: js-jsx -*-
+
 import React, { useRef, useEffect, useState } from 'react';
 //import Konva from 'konva';
 import { render } from 'react-dom';
@@ -14,10 +16,11 @@ Math.clamp = function(number, min, max) {
 
 const Foo = props => {
     const [state, setState] = useState({
-        isDragging: false,
         x: 50,
         y: 50
     });
+
+    const [dragging, setDragging] = useState(false);
 
     return (
         <Circle
@@ -25,23 +28,23 @@ const Foo = props => {
           y={state.y}
           radius={10}
           draggable
-          fill={state.isDragging ? 'green' : 'red'}
-          onDragStart={() => {
-              setState({
-                  isDragging: true
-              });
+          fill={dragging ? 'green' : 'red'}
+          onMouseDown={() => {
+              setDragging(true);
+          }}
+          onMouseUp={() => {
+              setDragging(false);
           }}
           onDragEnd={e => {
               console.log(e.target.x(), e.target.y());
               setState({
-                  isDragging: false,
                   x: e.target.x(),
                   y: e.target.y()
               });
           }}
-        /* onDragMove={e => { */
-        /*     //console.log(e); */
-        /* }} */
+          /* onDragMove={e => { */
+          /*     //console.log(e); */
+          /* }} */
           dragBoundFunc={pos => {
               //console.log(pos);
               return {
@@ -49,7 +52,7 @@ const Foo = props => {
                   y: Math.clamp(pos.y, 0, props.stageHeight),
               };
           }}
-        />);
+          />);
 };
 
 const GridDir = Object.freeze({
@@ -65,8 +68,9 @@ const Grid = props => {
             return props.width;
         case GridDir.h:
             return props.height;
+        default:
+            return null;
         }
-        return null;
     })();
     for (let i = 0; i < to; i += props.span) {
         let points = (() => {
@@ -75,13 +79,16 @@ const Grid = props => {
                 return [i, 0, i, props.height];
             case GridDir.h:
                 return [0, i, props.width, i];
+            default:
+                return null;
             }
-            return null;
         })();
         elems.push(<Line
-                     points={points}
-                     stroke='gray'
-                     strokeWidth={1}
+                   points={points}
+                   stroke='gray'
+                   strokeWidth={1}
+                   // TODO ??
+                   key={i}
                    />);
     }
 
@@ -135,53 +142,53 @@ const Chart = props => {
         <div
           className="chart-container"
           ref={ref}
-        >
+          >
           { !skipStage &&
-            <Stage width={stageW} height={stageH}>
-              <Layer>
-                <Grid
-                  width={stageW}
-                  height={stageH}
-                  dir={GridDir.v}
-                  span={50}
-                />
-                <Grid
-                  width={stageW}
-                  height={stageH}
-                  dir={GridDir.h}
-                  span={50}
-                />
-                <Foo
-                  stageWidth={stageW}
-                  stageHeight={stageH}
-                />
-              </Layer>
-            </Stage>
-          }
+              <Stage width={stageW} height={stageH}>
+                    <Layer>
+                          <Grid
+                                width={stageW}
+                                height={stageH}
+                                dir={GridDir.v}
+                                span={50}
+                                />
+                              <Grid
+                                    width={stageW}
+                                    height={stageH}
+                                    dir={GridDir.h}
+                                    span={50}
+                                    />
+                                  <Foo
+                                        stageWidth={stageW}
+                                        stageHeight={stageH}
+                                        />
+                        </Layer>
+                  </Stage>
+              }
         </div>
     );
 };
 
 
 const ProgMenuEntry = props => {
-    const [hideVars, setHideVars] = useState(false);
+    //const [hideVars, setHideVars] = useState(false);
+    const hideVars = props.hideVars;
 
     const arrow = hideVars ? '>' : 'V';
 
     const prog = props.prog;
 
     const varsList = hideVars ? null :
-
           <ul className="prog-menu-list">
-            {prog.locals.map((local =>
-                              <li key={local}> {local} </li>
-                             ))}
-          </ul>;
+          {prog.locals.map((local =>
+                            <li key={local}> {local} </li>
+                           ))}
+    </ul>;
     
     return (
         <>
           <li>
-            <div onClick={() => setHideVars(!hideVars)}>
+            <div onClick={props.onClick}>
               {arrow}
               &nbsp;
               {prog.name}
@@ -193,11 +200,61 @@ const ProgMenuEntry = props => {
     );
 };
 
-const ProgMenu = props => {
+const ProgInput = props => {
     return (
-        <ul className="prog-menu-list">
-          {props.progs.map((prog => <ProgMenuEntry prog={prog} key={prog.name}/>))}
+        <textarea
+          className="prog-menu-input"
+          spellCheck="false"
+          value={props.unselected ? "" : props.contents}
+          onChange={props.onChange}
+          />
+    );
+};
+
+const ProgMenu = props => {
+    const [showIdx, setShowIdx] = useState(-1);
+
+    const noneSelected = showIdx === -1;
+    const selectedProg = noneSelected ? null : props.progs[showIdx];
+    const selectedContents = noneSelected ? null : selectedProg.prog;
+    //console.log(selectedContents);
+
+    const handleChangeTo = (i) => () => {
+        if (i !== showIdx) {
+            setShowIdx(i);
+        } else {
+            setShowIdx(-1);
+        }
+    };
+    
+    return (
+        <>
+
+          <ProgInput
+            contents={selectedContents}
+            unselected={noneSelected}
+            onChange={(event) => {
+                if (noneSelected) {
+                    //setProgInputContents("");
+                } else {
+                    //setProgInputContents(event.target.value);
+                    props.setProgContents(showIdx, event.target.value);
+                }
+            }}
+            />
+
+            <ul className="prog-menu-list">
+              {props.progs.map(
+                  ((prog, i) =>
+                   <ProgMenuEntry
+                         prog={prog}
+                         key={prog.name}
+                         hideVars={i !== showIdx}
+                         onClick={handleChangeTo(i)}
+                         />)
+              )}
         </ul>
+            </>
     );
 };
 
@@ -206,19 +263,26 @@ const App = props => {
         {
             name: "testo",
             locals: ["pitch", "volume"],
-            prog: "",
+            prog: "asdgasfgas",
         },
         {
             name: "testo2",
             locals: ["pitch", "volume"],
-            prog: "",
+            prog: "hgdshdghasfg",
         },
     ];
+
+    const setProgContents = (i, contents) => {
+        // TODO
+    };
 
     return (
         <div className="app-container">
           <div className="menu-container">
-            <ProgMenu progs={progs} />
+            <ProgMenu
+              progs={progs}
+              setProgContents={setProgContents}
+              />
           </div>
           <div className="app-side-container">
             <div className="other-container"></div>
@@ -228,4 +292,20 @@ const App = props => {
     );
 };
 
-render(<App />, document.getElementById('root'));
+const ws = new WebSocket('ws://127.0.0.1:3001');
+ws.onopen = () => {
+    console.log('websocket connected')
+    ws.send("123456789")
+}
+
+ws.onmessage = evt => {
+    const message = JSON.parse(evt.data)
+    console.log(message)
+}
+
+ws.onclose = () => {
+    console.log('websocket disconnected')
+
+}
+
+render(<App ws={ws} />, document.getElementById('root'));

@@ -48,4 +48,13 @@ html {
 .prog-menu-list {
     list-style-type: none;
     padding-left: 20px;
+    user-select: none;
+}
+
+.prog-menu-input {
+    min-width: 100%;
+    max-width: 100%;
+
+    min-height: 20%;
+    resize: vertical;
 }
