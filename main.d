@@ -13,6 +13,7 @@ import core.stdc.string : strlen;
 import core.thread : Thread;
 
 import util;
+import websocket;
 
 import c_bindings;
 
@@ -633,6 +634,10 @@ void main() {
 `);
     }
 
+
+    WebSocket ws = WebSocket(3001);
+
+
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(
             RtMidiApi.RTMIDI_API_UNSPECIFIED,
@@ -659,5 +664,11 @@ void main() {
                 midi_p.msg[0 .. strlen(midi_p.msg)]);
 
         handle_midi_message(message_buf[0 .. message_size]);
+
+        const(char[]) ws_recv = ws.recv();
+        if (ws_recv) {
+            writefln("recv %s", ws_recv.length);
+            writeln(ws_recv);
+        }
     }
 }
