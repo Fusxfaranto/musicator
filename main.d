@@ -3,6 +3,7 @@ import std.conv : to;
 import std.datetime : dur;
 import std.exception : enforce;
 import std.file : readText;
+import std.json : JSONValue, parseJSON;
 import std.math : exp2, log2, PI, pow,
     round, fmod, _sin = sin;
 import std.process : executeShell;
@@ -12,6 +13,7 @@ import std.string : fromStringz;
 import core.stdc.string : strlen;
 import core.thread : Thread;
 
+import serial;
 import util;
 import websocket;
 
@@ -38,6 +40,16 @@ enum Tuning {
     JUST,
 }
 
+struct State {
+    struct Prog {
+        string name;
+        string[] locals;
+        string prog;
+    }
+
+    Prog[] progs;
+}
+
 __gshared {
     AudioContext* ctx;
     int[][128] key_local_idxs;
@@ -52,6 +64,8 @@ __gshared {
     Tuning tuning = Tuning.ET12;
 
     uint sample_rate;
+
+    State gstate;
 }
 
 int get_key_idx(int keycode) {
@@ -499,6 +513,35 @@ void handle_midi_message(const ubyte[] message) {
     }
 }
 
+struct WSMessage {
+    string type;
+    JSONValue contents;
+}
+
+void process_ws(ref WebSocket ws) {
+    const(char[]) ws_recv = ws.recv();
+    if (!ws_recv) {
+        return;
+    }
+
+    writefln("recv %s", ws_recv.length);
+    writeln(ws_recv);
+
+    WSMessage message;
+    deserialize(parseJSON(ws_recv), message);
+
+    writeln(message);
+
+    if (message.type == "getstate") {
+        message.type = "set";
+        message.contents = serialize(gstate);
+        ws.send(serialize(message).toString());
+    }
+    else {
+        assert(0);
+    }
+}
+
 extern (C) void tcc_error_func(void* opaque, const char* msg) {
     writeln(fromStringz(msg));
     assert(0);
@@ -617,26 +660,26 @@ void main() {
         add_event(ctx, 0, &e);
     }
 
-    version (none) {
-        import std.json : JSONValue, parseJSON;
-
+    {
         JSONValue j = parseJSON(`
-[
-{
-"type": "EVENT_SETTER",
-"setter": {
-"fn": "test_note",
-
-},
-"at_count": 0
-}
-]
+    [
+        {
+            "name": "testo",
+            "locals": ["pitch", "volume"],
+            "prog": "asdgasfgas",
+        },
+        {
+            "name": "testo2",
+            "locals": ["pitch", "volume"],
+            "prog": "hgdshdghasfg",
+        },
+    ];
 `);
+
+        deserialize(j, gstate.progs);
     }
 
-
     WebSocket ws = WebSocket(3001);
-
 
     enum midi_queue_size = 4096;
     RtMidiInPtr midi_p = rtmidi_in_create(
@@ -665,10 +708,6 @@ void main() {
 
         handle_midi_message(message_buf[0 .. message_size]);
 
-        const(char[]) ws_recv = ws.recv();
-        if (ws_recv) {
-            writefln("recv %s", ws_recv.length);
-            writeln(ws_recv);
-        }
+        process_ws(ws);
     }
 }

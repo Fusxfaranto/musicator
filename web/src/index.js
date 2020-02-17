@@ -29,6 +29,7 @@ const Foo = props => {
           radius={10}
           draggable
           fill={dragging ? 'green' : 'red'}
+          // TODO setting onMouseDown seems to cause problems
           onMouseDown={() => {
               setDragging(true);
           }}
@@ -259,21 +260,43 @@ const ProgMenu = props => {
 };
 
 const App = props => {
-    const progs = [
-        {
-            name: "testo",
-            locals: ["pitch", "volume"],
-            prog: "asdgasfgas",
-        },
-        {
-            name: "testo2",
-            locals: ["pitch", "volume"],
-            prog: "hgdshdghasfg",
-        },
-    ];
+    const [state, setState] = useState({
+        progs: [],
+    });
+
+    const ws = props.ws;
+    ws.onopen = () => {
+        console.log('websocket connected');
+
+        ws.send(JSON.stringify({
+            type: "getstate",
+            contents: null,
+        }));
+    }
+
+    ws.onmessage = evt => {
+        const message = JSON.parse(evt.data);
+        console.log(message);
+
+        switch (message.type) {
+        case 'set':
+            setState(message.contents);
+            break;
+
+        default:
+            console.error("bad message type");
+        }
+    }
+
+    ws.onclose = () => {
+        console.log('websocket disconnected');
+    }
+
+    const progs = state.progs;
 
     const setProgContents = (i, contents) => {
-        // TODO
+        console.log(i);
+        console.log(contents);
     };
 
     return (
@@ -293,19 +316,4 @@ const App = props => {
 };
 
 const ws = new WebSocket('ws://127.0.0.1:3001');
-ws.onopen = () => {
-    console.log('websocket connected')
-    ws.send("123456789")
-}
-
-ws.onmessage = evt => {
-    const message = JSON.parse(evt.data)
-    console.log(message)
-}
-
-ws.onclose = () => {
-    console.log('websocket disconnected')
-
-}
-
 render(<App ws={ws} />, document.getElementById('root'));

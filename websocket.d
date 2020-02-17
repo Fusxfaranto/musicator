@@ -1,5 +1,5 @@
 import std.base64 : Base64;
-import std.bitmanip : bitfields;
+import std.bitmanip : bitfields, bigEndianToNative, nativeToBigEndian;
 import std.digest.sha : sha1Of;
 import std.regex : matchFirst;
 import std.socket : InternetAddress, Socket,
@@ -45,14 +45,16 @@ align(1):
               ));
     // dfmt on
 
-    ushort[1] len_fields;
+    ubyte* len_fields() const pure {
+        return cast(ubyte*)(&this) + 2;
+    }
 
     ulong length() const pure {
         switch (payload_len_low) {
         default:
             return payload_len_low;
         case 126:
-            return len_fields[0];
+            return bigEndianToNative!ushort(len_fields[0..2]);
         case 127:
             // TODO
             assert(0);
@@ -60,7 +62,8 @@ align(1):
     }
 
     ubyte[4] mask() const pure {
-        ubyte* p = cast(ubyte*)(&len_fields[0]);
+        assert(mask_on);
+        ubyte* p = cast(ubyte*)(&this) + 2;
         switch (payload_len_low) {
         default:
             return p[0 .. 4];
@@ -72,19 +75,45 @@ align(1):
         }
     }
 
-    ubyte[] payload() const pure {
-        ubyte* p = cast(ubyte*)(&len_fields[0]) + 4;
+    private uint payload_start() const pure {
+        uint p = 2;
+        if (mask_on) {
+            p += 4;
+        }
         switch (payload_len_low) {
         default:
-            return p[0 .. payload_len_low];
+            return p;
         case 126:
-            return p[2 .. (len_fields[0] + 2)];
+            return p + 2;
         case 127:
             // TODO
             assert(0);
         }
     }
 
+    ubyte[] header_contents() const pure {
+        ubyte* p = cast(ubyte*)(&this);
+        return p[0 .. payload_start()];
+    }
+
+    ubyte[] payload() const pure {
+        ubyte* p = cast(ubyte*)(&this) + payload_start();
+        return p[0 .. length()];
+    }
+
+    void set_length(ulong l) {
+        if (l < 126) {
+            payload_len_low = cast(ubyte)(l);
+        }
+        else if (l <= 0xffff) {
+            payload_len_low = 126;
+            len_fields[0..2] = nativeToBigEndian(cast(ushort)(l));
+        }
+        else {
+            // TODO
+            assert(0);
+        }
+    }
 }
 
 struct WebSocket {
@@ -188,5 +217,31 @@ struct WebSocket {
                 assert(0);
             }
         }
+    }
+
+    private void rawSend(const(char[]) s) {
+        auto n = connection.send(s);
+        if (n == Socket.ERROR) {
+            assert(0);
+        } else if (n < s.length) {
+            assert(0);
+        }
+    }
+
+    void send(const(char[]) s) {
+        Header* h = cast(Header*)(buf.ptr);
+        h.fin = true;
+        h.reserved = 0;
+        h.opcode = 0x01;
+        h.mask_on = false;
+        h.set_length(s.length);
+
+        writefln("sending %s", s);
+
+        writeln(dump_mem(h.header_contents()));
+        writefln("%s %s", h.length(), s.length);
+
+        rawSend(cast(char[])(h.header_contents()));
+        rawSend(s);
     }
 }
