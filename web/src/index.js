@@ -264,6 +264,8 @@ const App = props => {
         progs: [],
     });
 
+    const [shouldUpdate, setShouldUpdate] = useState(false);
+
     const ws = props.ws;
     ws.onopen = () => {
         console.log('websocket connected');
@@ -292,12 +294,40 @@ const App = props => {
         console.log('websocket disconnected');
     }
 
-    const progs = state.progs;
+    let progs = state.progs;
 
     const setProgContents = (i, contents) => {
-        console.log(i);
-        console.log(contents);
+        //console.log(i);
+        //console.log(contents);
+
+        if (progs[i].prog !== contents) {
+            progs[i].prog = contents;
+            setState({
+                ...state,
+                progs: progs,
+            })
+
+            setShouldUpdate(true);
+        } else {
+            console.error("???");
+        }
     };
+
+    useEffect(() => {
+        // TODO something more efficient
+        if (!shouldUpdate) {
+            return;
+        }
+
+        ws.send(JSON.stringify(
+            {
+                type: "setstate",
+                contents: state,
+            }
+        ));
+
+        setShouldUpdate(false);
+    }, [shouldUpdate, state, ws]);
 
     return (
         <div className="app-container">

@@ -536,6 +536,8 @@ void process_ws(ref WebSocket ws) {
         message.type = "set";
         message.contents = serialize(gstate);
         ws.send(serialize(message).toString());
+    } else if (message.type == "setstate") {
+        deserialize(message.contents, gstate);
     }
     else {
         assert(0);
