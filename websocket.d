@@ -189,7 +189,9 @@ struct WebSocket {
             // writeln(h.mask_on);
             // writeln(h.payload_len_low);
 
+            // TODO this definitely fires sometimes
             assert(h.fin);
+
             assert(h.mask_on);
             //ulong len = h.length();
             ubyte[4] mask = h.mask();

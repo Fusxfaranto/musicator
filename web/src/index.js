@@ -1,9 +1,14 @@
 // -*- mode: js-jsx -*-
 
+import AceEditor from "react-ace-builds";
 import React, { useRef, useEffect, useState } from 'react';
 //import Konva from 'konva';
 import { render } from 'react-dom';
 import { Circle, Stage, Layer, Line } from 'react-konva';
+
+
+import 'ace-builds/src-noconflict/mode-c_cpp';
+import 'ace-builds/src-noconflict/theme-github';
 
 import './index.css';
 
@@ -202,6 +207,19 @@ const ProgMenuEntry = props => {
 };
 
 const ProgInput = props => {
+
+    return (
+        <AceEditor
+          className="prog-menu-input"
+          mode="c_cpp"
+          theme="github"
+          value={props.unselected ? "" : props.contents}
+          onChange={props.onChange}
+          name={props.name}
+          // editorProps={{ $blockScrolling: true }}
+          />
+    );
+
     return (
         <textarea
           className="prog-menu-input"
@@ -232,14 +250,15 @@ const ProgMenu = props => {
         <>
 
           <ProgInput
+            name="main-prog-input"
             contents={selectedContents}
             unselected={noneSelected}
-            onChange={(event) => {
+            onChange={(value) => {
                 if (noneSelected) {
                     //setProgInputContents("");
                 } else {
-                    //setProgInputContents(event.target.value);
-                    props.setProgContents(showIdx, event.target.value);
+                    //setProgInputContents(value);
+                    props.setProgContents(showIdx, value);
                 }
             }}
             />
