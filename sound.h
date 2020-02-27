@@ -29,6 +29,8 @@ typedef double (*ValueFn)(
         bool* expire);
 
 typedef struct {
+    // TODO replace with index into jump table, to make
+    // modifying instruments simpler?
     ValueFn fn;
     const int* local_idxs;
 

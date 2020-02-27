@@ -226,7 +226,7 @@ static uint process_events(StreamData* p, uint64_t n) {
             return next_n;
         }
 
-        printf("processing event %lu\n", p->event_pos);
+        //printf("processing event %lu\n", p->event_pos);
 
         switch (e->type) {
         case EVENT_SETTER: {

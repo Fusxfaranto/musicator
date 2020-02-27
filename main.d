@@ -2,7 +2,7 @@ import std.algorithm : max;
 import std.conv : to;
 import std.datetime : dur;
 import std.exception : enforce;
-import std.file : readText;
+import std.file : readText, write;
 import std.json : JSONValue, parseJSON;
 import std.math : exp2, log2, PI, pow,
     round, fmod, _sin = sin;
@@ -52,6 +52,7 @@ struct State {
 
 __gshared {
     AudioContext* ctx;
+    TCCState* tcc_state;
     int[][128] key_local_idxs;
 
     ValueFn note_fn;
@@ -513,9 +514,27 @@ void handle_midi_message(const ubyte[] message) {
     }
 }
 
+void load_state(string filename) {
+    JSONValue j = parseJSON(readText(filename));
+    deserialize(j, gstate);
+
+    compile_prog(gstate.progs[0]);
+
+}
+
 struct WSMessage {
     string type;
     JSONValue contents;
+
+    struct SaveLoad {
+        string filename;
+    }
+}
+
+void send_state(ref WebSocket ws, ref WSMessage message) {
+    message.type = "set";
+    message.contents = serialize(gstate);
+    ws.send(serialize(message).toString());
 }
 
 void process_ws(ref WebSocket ws) {
@@ -525,19 +544,33 @@ void process_ws(ref WebSocket ws) {
     }
 
     writefln("recv %s", ws_recv.length);
-    writeln(ws_recv);
+    //writeln(ws_recv);
 
     WSMessage message;
     deserialize(parseJSON(ws_recv), message);
 
-    writeln(message);
+    //writeln(message);
 
     if (message.type == "getstate") {
-        message.type = "set";
-        message.contents = serialize(gstate);
-        ws.send(serialize(message).toString());
-    } else if (message.type == "setstate") {
+        send_state(ws, message);
+    }
+    else if (message.type == "setstate") {
         deserialize(message.contents, gstate);
+
+        // TODO recompile what's updated
+        compile_prog(gstate.progs[0]);
+    }
+    else if (message.type == "save") {
+        WSMessage.SaveLoad params;
+        deserialize(message.contents, params);
+        write(params.filename, serialize(gstate).toString());
+    }
+    else if (message.type == "load") {
+        WSMessage.SaveLoad params;
+        deserialize(message.contents, params);
+        load_state(params.filename);
+
+        send_state(ws, message);
     }
     else {
         assert(0);
@@ -546,7 +579,38 @@ void process_ws(ref WebSocket ws) {
 
 extern (C) void tcc_error_func(void* opaque, const char* msg) {
     writeln(fromStringz(msg));
-    assert(0);
+    //assert(0);
+}
+
+void compile_prog(ref State.Prog prog) {
+    // TODO don't do all of this every time?
+    // also i think this is totally broken for multiple progs
+
+    if (tcc_state) {
+        tcc_delete(tcc_state);
+    }
+    tcc_state = tcc_new();
+    tcc_set_error_func(tcc_state, null, &tcc_error_func);
+    enforce(tcc_set_output_type(tcc_state,
+            TCC_OUTPUT_MEMORY) == 0);
+    tcc_set_lib_path(tcc_state, "tcc");
+    enforce(tcc_add_library(tcc_state, "m") == 0);
+    enforce(tcc_add_sysinclude_path(tcc_state,
+            "tcc/include") == 0);
+
+    {
+        string s = prog.prog ~ '\0';
+        auto r = tcc_compile_string(tcc_state, s.ptr);
+        if (r != 0) {
+            return;
+        }
+    }
+
+    tcc_relocate(tcc_state, TCC_RELOCATE_AUTO);
+
+    // TODO map to prog
+    note_fn = cast(ValueFn)tcc_get_symbol(tcc_state, "note");
+    enforce(note_fn);
 }
 
 void main() {
@@ -572,25 +636,8 @@ void main() {
 
     sample_rate = cast(uint)get_sample_rate(ctx);
 
-    TCCState* tcc_state = tcc_new();
-    scope (exit)
-        tcc_delete(tcc_state);
-    tcc_set_error_func(tcc_state, null, &tcc_error_func);
-    enforce(tcc_set_output_type(tcc_state,
-            TCC_OUTPUT_MEMORY) == 0);
-    tcc_set_lib_path(tcc_state, "tcc");
-    enforce(tcc_add_library(tcc_state, "m") == 0);
-    enforce(tcc_add_sysinclude_path(tcc_state,
-            "tcc/include") == 0);
-
-    {
-        string s = readText("testo/test_note.c") ~ '\0';
-        enforce(tcc_compile_string(tcc_state, s.ptr) == 0);
-    }
-
-    tcc_relocate(tcc_state, TCC_RELOCATE_AUTO);
-    note_fn = cast(ValueFn)tcc_get_symbol(tcc_state, "note");
-    enforce(note_fn);
+    // TODO
+    load_state("state.json");
 
     static if (false) {
         note_fn = &test_note;
@@ -660,25 +707,6 @@ void main() {
         e.value.d = 0.5;
         e.target_idx = get_name_idx(ctx, 0, "fm_freq".ptr);
         add_event(ctx, 0, &e);
-    }
-
-    {
-        JSONValue j = parseJSON(`
-    [
-        {
-            "name": "testo",
-            "locals": ["pitch", "volume"],
-            "prog": "asdgasfgas",
-        },
-        {
-            "name": "testo2",
-            "locals": ["pitch", "volume"],
-            "prog": "hgdshdghasfg",
-        },
-    ];
-`);
-
-        deserialize(j, gstate.progs);
     }
 
     WebSocket ws = WebSocket(3001);

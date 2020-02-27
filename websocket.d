@@ -236,10 +236,10 @@ struct WebSocket {
         h.mask_on = false;
         h.set_length(s.length);
 
-        writefln("sending %s", s);
+        // writefln("sending %s", s);
 
-        writeln(dump_mem(h.header_contents()));
-        writefln("%s %s", h.length(), s.length);
+        // writeln(dump_mem(h.header_contents()));
+        // writefln("%s %s", h.length(), s.length);
 
         rawSend(cast(char[])(h.header_contents()));
         rawSend(s);

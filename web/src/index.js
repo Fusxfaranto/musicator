@@ -338,7 +338,37 @@ const App = props => {
               />
           </div>
           <div className="app-side-container">
-            <div className="other-container"></div>
+            <div className="other-container">
+
+              <button onClick={() => {
+                    ws.send(JSON.stringify(
+                        {
+                            type: "save",
+                            contents: {
+                                // TODO
+                                filename: "state.json",
+                            },
+                        }
+                    ));}
+                }>
+                Save
+              </button>
+
+              <button onClick={() => {
+                    ws.send(JSON.stringify(
+                        {
+                            type: "load",
+                            contents: {
+                                // TODO
+                                filename: "state.json",
+                            },
+                        }
+                    ));}
+                }>
+                Load
+              </button>
+
+            </div>
             <Chart />
           </div>
         </div>
