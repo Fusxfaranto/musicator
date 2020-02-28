@@ -1,5 +1,6 @@
 import std.base64 : Base64;
-import std.bitmanip : bitfields, bigEndianToNative, nativeToBigEndian;
+import std.bitmanip : bitfields,
+    bigEndianToNative, nativeToBigEndian;
 import std.digest.sha : sha1Of;
 import std.regex : matchFirst;
 import std.socket : InternetAddress, Socket,
@@ -54,7 +55,8 @@ align(1):
         default:
             return payload_len_low;
         case 126:
-            return bigEndianToNative!ushort(len_fields[0..2]);
+            return bigEndianToNative!ushort(
+                    len_fields[0 .. 2]);
         case 127:
             // TODO
             assert(0);
@@ -91,6 +93,10 @@ align(1):
         }
     }
 
+    ulong total_length() const pure {
+        return payload_start() + length();
+    }
+
     ubyte[] header_contents() const pure {
         ubyte* p = cast(ubyte*)(&this);
         return p[0 .. payload_start()];
@@ -107,7 +113,8 @@ align(1):
         }
         else if (l <= 0xffff) {
             payload_len_low = 126;
-            len_fields[0..2] = nativeToBigEndian(cast(ushort)(l));
+            len_fields[0 .. 2] = nativeToBigEndian(
+                    cast(ushort)(l));
         }
         else {
             // TODO
@@ -119,10 +126,11 @@ align(1):
 struct WebSocket {
     private Socket server;
     private Socket connection;
-    private char[4096] buf;
+    private char[] fragmented_payload;
+    private const(char)[] queued_packets;
+    private char[1024 * 64] buf;
 
     this(ushort port) {
-        connection = null;
         server = new TcpSocket();
         server.setOption(SocketOptionLevel.SOCKET,
                 SocketOption.REUSEADDR, true);
@@ -135,18 +143,18 @@ struct WebSocket {
         server.close();
     }
 
-    private const(char[]) rawRecv() {
-        auto n = connection.receive(buf);
+    private const(char)[] rawRecv(size_t recv_start) {
+        auto n = connection.receive(buf[recv_start .. $]);
         if (n == Socket.ERROR) {
             if (!wouldHaveBlocked()) {
                 writeln("websocket error");
             }
             return [];
         }
-        return buf[0 .. n];
+        return buf[0 .. (n + recv_start)];
     }
 
-    const(char[]) recv() {
+    const(char)[] recv() {
         if (connection is null) {
             try {
                 connection = server.accept();
@@ -157,7 +165,7 @@ struct WebSocket {
 
             writeln("websocket connected");
 
-            auto s = rawRecv();
+            auto s = rawRecv(0);
             auto key = Base64.encode(sha1Of(s.matchFirst(
                     r"Sec-WebSocket-Key: (.*)")[1]
                     ~ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
@@ -172,52 +180,85 @@ struct WebSocket {
         assert(connection.isAlive);
         assert(connection.blocking == false);
 
-        auto s = rawRecv();
-        if (s.length == 0) {
-            return [];
+        const(char)[] s;
+        if (queued_packets) {
+            s = queued_packets;
+            queued_packets = null;
         }
         else {
-            //writeln(dump_mem!(4, "%08b")(cast(ubyte[])(s)));
-
-            assert(s.length >= Header.sizeof);
-            Header* h = cast(Header*)(s.ptr);
-            assert(cast(void*)(h) == cast(void*)(s.ptr));
-
-            // writeln(h.fin);
-            // writeln(h.reserved);
-            // writeln(h.opcode);
-            // writeln(h.mask_on);
-            // writeln(h.payload_len_low);
-
-            // TODO this definitely fires sometimes
-            assert(h.fin);
-
-            assert(h.mask_on);
-            //ulong len = h.length();
-            ubyte[4] mask = h.mask();
-            //writeln(dump_mem(mask));
-            ubyte[] payload = h.payload();
-            //writeln(dump_mem(payload));
-
-            for (uint i; i < payload.length;
-                    i++) {
-                payload[i] ^= mask[i % 4];
-            }
-
-            switch (h.opcode) {
-            case 0x01:
-                return cast(char[])(payload);
-
-            case 0x08:
-                connection.close();
-                connection = null;
-                writeln("websocket closed");
+            s = rawRecv(0);
+            if (s.length == 0) {
                 return [];
-
-            default:
-                writefln("unknown opcode %02X", h.opcode);
-                assert(0);
             }
+        }
+
+        // writeln(dump_mem!(4,
+        //         "%08b")(cast(ubyte[])(s[0 .. 32])));
+
+        assert(s.length >= Header.sizeof);
+        Header* h = cast(Header*)(s.ptr);
+        assert(cast(void*)(h) == cast(void*)(s.ptr));
+
+        if (!h.fin) {
+            // TODO does this actually happen?
+            assert(0);
+        }
+
+        if (h.total_length() < s.length) {
+            queued_packets = s[h.total_length() .. $];
+        }
+        else if (h.total_length() > s.length) {
+            // TODO this doesn't seem quite functional
+            assert(0);
+
+            connection.blocking = true;
+            scope (exit)
+                connection.blocking = false;
+
+            do {
+                s = rawRecv(s.length);
+            }
+            while (h.total_length() > s.length);
+        }
+
+        assert(h.mask_on);
+        //ulong len = h.length();
+        ubyte[4] mask = h.mask();
+        //writeln(dump_mem(mask));
+        ubyte[] payload = h.payload();
+        //writeln(dump_mem!16(payload));
+
+        for (uint i; i < payload.length; i++) {
+            payload[i] ^= mask[i % 4];
+        }
+
+        switch (h.opcode) {
+        case 0x01:
+            if (h.fin) {
+                if (fragmented_payload) {
+                    char[] res = fragmented_payload ~ cast(
+                            char[])(payload);
+                    fragmented_payload = null;
+                    return res;
+                }
+                else {
+                    return cast(char[])(payload);
+                }
+            }
+            else {
+                fragmented_payload ~= cast(char[])(payload);
+                return [];
+            }
+
+        case 0x08:
+            connection.close();
+            connection = null;
+            writeln("websocket closed");
+            return [];
+
+        default:
+            writefln("unknown opcode %02X", h.opcode);
+            assert(0);
         }
     }
 
@@ -225,7 +266,8 @@ struct WebSocket {
         auto n = connection.send(s);
         if (n == Socket.ERROR) {
             assert(0);
-        } else if (n < s.length) {
+        }
+        else if (n < s.length) {
             assert(0);
         }
     }
