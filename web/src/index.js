@@ -187,7 +187,7 @@ const ProgMenuEntry = props => {
     const varsList = hideVars ? null :
           <ul className="prog-menu-list">
           {prog.locals.map((local =>
-                            <li key={local}> {local} </li>
+                            <li key={local.name}> {local.name} {local.type} </li>
                            ))}
     </ul>;
     
@@ -206,26 +206,26 @@ const ProgMenuEntry = props => {
     );
 };
 
-const ProgInput = props => {
-
+const CodeInput = props => {
     return (
         <AceEditor
-          className="prog-menu-input"
+          className={props.className}
           mode="c_cpp"
           theme="github"
-          value={props.unselected ? "" : props.contents}
+          value={props.contents}
           onChange={props.onChange}
           name={props.name}
           // editorProps={{ $blockScrolling: true }}
-          />
-    );
+          />);
+}
 
+const ProgInput = props => {
     return (
-        <textarea
+        <CodeInput
           className="prog-menu-input"
-          spellCheck="false"
-          value={props.unselected ? "" : props.contents}
+          contents={props.unselected ? "" : props.contents}
           onChange={props.onChange}
+          name={props.name}
           />
     );
 };
@@ -359,33 +359,45 @@ const App = props => {
           <div className="app-side-container">
             <div className="other-container">
 
-              <button onClick={() => {
-                    ws.send(JSON.stringify(
-                        {
-                            type: "save",
-                            contents: {
-                                // TODO
-                                filename: "state.json",
-                            },
-                        }
-                    ));}
-                }>
-                Save
-              </button>
+              <CodeInput
+                className="prog-helper-input"
+                contents={state.prog_helpers}
+                onChange={(value) => {
+                    setState({
+                        ...state,
+                        prog_helpers: value,
+                    })
+                    setShouldUpdate(true);
+                }}
+                />
 
-              <button onClick={() => {
-                    ws.send(JSON.stringify(
-                        {
-                            type: "load",
-                            contents: {
-                                // TODO
-                                filename: "state.json",
-                            },
-                        }
-                    ));}
-                }>
-                Load
-              </button>
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "save",
+                              contents: {
+                                  // TODO
+                                  filename: "state.json",
+                              },
+                          }
+                      ));}
+                  }>
+                  Save
+                </button>
+
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "load",
+                              contents: {
+                                  // TODO
+                                  filename: "state.json",
+                              },
+                          }
+                      ));}
+                  }>
+                  Load
+                </button>
 
             </div>
             <Chart />

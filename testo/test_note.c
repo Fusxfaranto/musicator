@@ -13,24 +13,18 @@ enum Bindings {
 
 double
 tone(uint64_t sample_rate, double pitch, uint64_t t) {
-    double period_real = sample_rate / pitch;
-    double period_f = floor(period_real);
-    double period_err = period_real - period_f;
+    // TODO does this run into precision issues?
+    double t_f = (double)(t);
+    double period = sample_rate / pitch;
+    double half_period = period / 2;
+    double t_m = fmod(t_f, period);
 
-    // TODO this shifts frequencies around inconsistently
-    // because this rounds the same direction every sample
-    // (but fixing this will also require matching
-    // frequencies...)
-    uint64_t period = (uint64_t)round(sample_rate / pitch);
 #if 0
-    return t % period >= period / 2 ? 1.0 : -1.0;
-#elif 0
-    uint64_t half_period = (period + 1) / 2;
-    uint64_t p_t = t % period;
-    double p_t_2_frac = 2.0 * (p_t % half_period) /
-                        (double)(half_period)-1.0;
+    return t_m >= half_period ? 1.0 : -1.0;
+#elif 1
+    double p_t_2_frac = 2 * fmod(t_m, half_period) / half_period - 1;
 
-    return (p_t < half_period ? 1.0 : -1.0) * p_t_2_frac;
+    return (t_m < half_period ? 1.0 : -1.0) * p_t_2_frac;
 #else
     return sin(
             2 * PI * pitch * (t) / (double)(sample_rate));

@@ -58,3 +58,8 @@ html {
     min-height: 20%;
     resize: vertical;
 }
+
+.prog-helper-input {
+    max-height: 200px;
+    max-width: 600px;
+}

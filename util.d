@@ -36,6 +36,13 @@ T combine_shorts(T)(const(ushort[]) a)
     return (a[1] << 16) + a[0];
 }
 
+string format_s(A...)(string fmt, A args) {
+    auto writer = appender!string();
+    writer.formattedWrite(fmt, args);
+
+    return writer.data;
+}
+
 string format(A...)(string fmt, A args) {
     auto writer = appender!string();
     writer.formattedWrite(fmt, args);
