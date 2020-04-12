@@ -18,6 +18,7 @@ Math.clamp = function(number, min, max) {
 };
 
 
+// TODO note input by simultaneously tapping out beat and playing notes, with configurable snap intervals (which will require having tempo integration)
 
 const Foo = props => {
     const [state, setState] = useState({

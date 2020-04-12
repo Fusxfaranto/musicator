@@ -1,9 +1,9 @@
 root = true
 
 [*]
-max_line_length = 60
+max_line_length = 70
 
 [*.d]
 dfmt_brace_style = stroustrup
-dfmt_soft_max_line_length = 40
+dfmt_soft_max_line_length = 60
 dfmt_space_after_cast = false
