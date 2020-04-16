@@ -29,5 +29,7 @@
             "name": "testo2",
             "prog": "return 0;"
         }
-    ]
+    ],
+    "snap_denominator": 16,
+    "tempo": 120
 }

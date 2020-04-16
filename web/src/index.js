@@ -279,6 +279,32 @@ const ProgMenu = props => {
     );
 };
 
+const NumInput = props => {
+    const [inputState, setInputState] = useState(null);
+
+    if (props.stateVal && inputState === null) {
+        setInputState(props.stateVal);
+    }
+
+    //console.log(props.stateVal);
+    console.log(inputState);
+    return (
+        <input
+          type="number"
+          value={inputState === null ? '' : inputState}
+          onChange={(e) => {
+              const value = e.currentTarget.value;
+              //console.log(value);
+              setInputState(value);
+              if (value > 0) {
+                  props.updateState(parseInt(value));
+              }
+              //return value;
+          }}
+          />
+    );
+}
+
 const App = props => {
     const [state, setState] = useState({
         progs: [],
@@ -400,6 +426,52 @@ const App = props => {
                   Load
                 </button>
 
+                <br />
+                <br />
+
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "pause",
+                              contents: null,
+                          }
+                      ));}
+                  }>
+                  Pause
+                </button>
+
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "play",
+                              contents: null,
+                          }
+                      ));}
+                  }>
+                  Play
+                </button>
+
+
+                <NumInput
+                  stateVal={state.snap_denominator}
+                  updateState={(value) => {
+                      setState({
+                          ...state,
+                          snap_denominator: value,
+                      })
+                      setShouldUpdate(true);
+                  }}
+                  />
+                <NumInput
+                  stateVal={state.tempo}
+                  updateState={(value) => {
+                      setState({
+                          ...state,
+                          tempo: value,
+                      })
+                      setShouldUpdate(true);
+                  }}
+                  />
             </div>
             <Chart />
           </div>

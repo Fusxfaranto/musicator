@@ -75,3 +75,27 @@ string dump_mem(alias W = 4, alias fmt = "%02X")(ubyte[] mem) {
 
     return writer.data;
 }
+
+void unsafe_set_length(T)(ref T[] a, size_t n) {
+    auto c = a.capacity;
+    a.length = n;
+    a.assumeSafeAppend();
+    if (c >= n) {
+        assert(a.capacity == c, c.to!string() ~ " " ~ a.capacity.to!string());
+    }
+}
+
+void unsafe_reset(T)(ref T[] a) {
+    unsafe_set_length(a, 0);
+}
+
+void unsafe_popback(T)(ref T[] a) {
+    unsafe_set_length(a, a.length - 1);
+}
+
+void unsafe_assign(alias init, T)(ref T[] a) {
+    a.unsafe_reset();
+    static foreach (i, e; init) {
+        a[i] = init[i];
+    }
+}

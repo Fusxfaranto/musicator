@@ -34,6 +34,11 @@ fast_float_type sin(fast_float_type f) {
 //             message[0 .. message_size]);
 // }
 
+enum StreamId : ulong {
+    LIVE,
+    TRACK,
+}
+
 enum Tuning {
     ET12,
     ET19,
@@ -67,6 +72,10 @@ struct State {
     string prog_helpers;
     Prog[] progs;
     int midi_prog_idx;
+
+    int snap_denominator;
+    // TODO make tempo event-based, so it can be dynamic
+    int tempo;
 }
 
 struct MidiControl {
@@ -80,6 +89,7 @@ struct MidiControl {
 
 __gshared {
     AudioContext* ctx;
+    uint sample_rate;
     int[][128] key_local_idxs;
 
     bool[128] key_held = false;
@@ -89,9 +99,9 @@ __gshared {
     bool midi_suspend = false;
     Tuning tuning = Tuning.ET12;
 
-    MidiControl last_changed_controller;
+    Event[] event_queue;
 
-    uint sample_rate;
+    MidiControl last_changed_controller;
 
     State gstate;
 }
@@ -106,7 +116,7 @@ void set_tuning(int key_code) {
 
     Event e;
     e.type = EventType.EVENT_WRITE;
-    e.target_idx = get_name_idx(ctx, 0,
+    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
             format("test_note%s.pitch", key_code).ptr);
 
     int rel_note = (key_code + (128 * 12) - 72) % 12;
@@ -117,7 +127,7 @@ void set_tuning(int key_code) {
     case Tuning.ET12: {
             enum cents = 100;
             e.value.d = 440 * exp2((key_code - 69) * (cents / 1200.));
-            add_event(ctx, 0, &e);
+            add_event(ctx, StreamId.LIVE, &e);
             break;
         }
 
@@ -171,7 +181,7 @@ void set_tuning(int key_code) {
                 assert(p == 1 || p == -1);
                 e.value.d *= exp2(p / 19.);
             }
-            add_event(ctx, 0, &e);
+            add_event(ctx, StreamId.LIVE, &e);
             break;
         }
 
@@ -207,11 +217,51 @@ void set_tuning(int key_code) {
 
             }
             e.value.d = octave_scale * C * intervals[rel_note];
-            add_event(ctx, 0, &e);
+            add_event(ctx, StreamId.LIVE, &e);
 
             break;
         }
     }
+}
+
+void register_live_event(Event e) {
+    // TODO stream id
+    add_event(ctx, StreamId.LIVE, &e);
+    event_queue ~= e;
+}
+
+// TODO define these dynamically
+void register_note_down(ubyte midi_note, ubyte midi_velocity) {
+    Event e;
+    e.type = EventType.EVENT_WRITE;
+    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                                format("test_note%s.volume",
+                                       midi_note).ptr);
+    e.value.d = midi_velocity / 128.;
+    register_live_event(e);
+
+    e = Event.init;
+    e.type = EventType.EVENT_WRITE_TIME;
+    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                                format("test_note%s.started_at",
+                                       midi_note).ptr);
+    register_live_event(e);
+
+    e = Event.init;
+    e.type = EventType.EVENT_SETTER;
+    e.setter = ValueSetter(gstate
+                           .progs[gstate.midi_prog_idx].compiled.fn,
+                           key_local_idxs[midi_note].ptr,
+                           0, get_key_idx(midi_note));
+    register_live_event(e);
+}
+void register_note_up(ubyte midi_note) {
+    Event e;
+    e.type = EventType.EVENT_WRITE_TIME;
+    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                                format("test_note%s.released_at",
+                                       midi_note).ptr);
+    register_live_event(e);
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -229,38 +279,12 @@ void handle_midi_message(const ubyte[] message) {
 
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
-                    Event e;
                     if (key_held[midi_note]) {
-                        e.type = EventType.EVENT_WRITE;
-                        e.target_idx = get_name_idx(ctx, 0,
-                                format("test_note%s.volume",
-                                    midi_note).ptr);
-                        e.value.d = midi_velocity / 128.;
-                        add_event(ctx, 0, &e);
-
-                        e = Event.init;
-                        e.type = EventType.EVENT_WRITE_TIME;
-                        e.target_idx = get_name_idx(ctx, 0,
-                                format("test_note%s.started_at",
-                                    midi_note).ptr);
-                        add_event(ctx, 0, &e);
-
-                        e = Event.init;
-                        e.type = EventType.EVENT_SETTER;
-                        e.setter = ValueSetter(gstate
-                                .progs[gstate.midi_prog_idx].compiled.fn,
-                                key_local_idxs[midi_note].ptr,
-                                0, get_key_idx(midi_note));
-                        add_event(ctx, 0, &e);
-
+                        register_note_down(midi_note, midi_velocity);
                         last_key_held = midi_note;
                     }
                     else {
-                        e.type = EventType.EVENT_WRITE_TIME;
-                        e.target_idx = get_name_idx(ctx, 0,
-                                format("test_note%s.released_at",
-                                    midi_note).ptr);
-                        add_event(ctx, 0, &e);
+                        register_note_up(midi_note);
                     }
                     key_held_soft[midi_note] = key_held[midi_note];
                 }
@@ -313,9 +337,9 @@ void handle_midi_message(const ubyte[] message) {
                         Event e;
                         e.type = EventType.EVENT_WRITE;
                         e.value.d = fraction;
-                        e.target_idx = get_name_idx(ctx, 0, "fm_freq"
+                        e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_freq"
                                 .ptr);
-                        add_event(ctx, 0, &e);
+                        add_event(ctx, StreamId.LIVE, &e);
                     }
                     break;
 
@@ -334,10 +358,10 @@ void handle_midi_message(const ubyte[] message) {
                         e.type = EventType.EVENT_WRITE;
                         e.value.d = 1;
                         for (int i = 0; i < 128; i++) {
-                            e.target_idx = get_name_idx(ctx, 0,
+                            e.target_idx = get_name_idx(ctx, StreamId.LIVE,
                                     format("test_note%s.pitch_offset_19",
                                         i).ptr);
-                            add_event(ctx, 0, &e);
+                            add_event(ctx, StreamId.LIVE, &e);
                         }
                         break;
                     }
@@ -348,7 +372,7 @@ void handle_midi_message(const ubyte[] message) {
                         Event e;
                         e.type = EventType.EVENT_RESET_STREAM;
                         e.to_count = 1;
-                        add_event(ctx, 0, &e);
+                        add_event(ctx, StreamId.LIVE, &e);
                     }
                     break;
 
@@ -360,10 +384,10 @@ void handle_midi_message(const ubyte[] message) {
                         e.type = EventType.EVENT_WRITE_TIME;
                         for (int i = 0; i < 128; i++) {
                             if (!key_held[i] && key_held_soft[i]) {
-                                e.target_idx = get_name_idx(ctx, 0,
+                                e.target_idx = get_name_idx(ctx, StreamId.LIVE,
                                         format("test_note%s.released_at",
                                             i).ptr);
-                                add_event(ctx, 0, &e);
+                                add_event(ctx, StreamId.LIVE, &e);
                                 key_held_soft[i] = false;
                             }
                         }
@@ -387,8 +411,8 @@ void handle_midi_message(const ubyte[] message) {
             Event e;
             e.type = EventType.EVENT_WRITE;
             e.value.d = fraction;
-            e.target_idx = get_name_idx(ctx, 0, "fm_mod".ptr);
-            add_event(ctx, 0, &e);
+            e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_mod".ptr);
+            add_event(ctx, StreamId.LIVE, &e);
             break;
 
         default:
@@ -464,6 +488,14 @@ void process_ws(ref WebSocket ws) {
         load_state(params.filename);
 
         send_state(ws, message);
+    }
+    else if (message.type == "play") {
+        // TODO stream id
+        stream_play(ctx, StreamId.LIVE);
+    }
+    else if (message.type == "pause") {
+        // TODO stream id
+        stream_pause(ctx, StreamId.LIVE);
     }
     else {
         assert(0);
@@ -618,14 +650,14 @@ void main() {
             key_local_idxs[i] = new int[local_names.length + global_names
                 .length];
             static foreach (j, name; local_names) {
-                key_local_idxs[i][j] = get_name_idx(ctx, 0,
+                key_local_idxs[i][j] = get_name_idx(ctx, StreamId.LIVE,
                         format("test_note%s.%s", i, name).ptr);
             }
 
             auto offset = local_names.length;
             static foreach (j, name; global_names) {
                 key_local_idxs[i][j + offset] = get_name_idx(ctx,
-                        0, format("%s", name).ptr);
+                        StreamId.LIVE, format("%s", name).ptr);
             }
         }
     }
@@ -635,15 +667,15 @@ void main() {
         e.type = EventType.EVENT_WRITE;
 
         for (int key_code = 0; key_code < 128; key_code++) {
-            e.target_idx = get_name_idx(ctx, 0,
+            e.target_idx = get_name_idx(ctx, StreamId.LIVE,
                     format("test_note%s.pitch_offset_19", key_code).ptr);
             e.value.d = 1;
-            add_event(ctx, 0, &e);
+            add_event(ctx, StreamId.LIVE, &e);
 
-            e.target_idx = get_name_idx(ctx, 0,
+            e.target_idx = get_name_idx(ctx, StreamId.LIVE,
                     format("test_note%s.released_at", key_code).ptr);
             e.value.u = 0;
-            add_event(ctx, 0, &e);
+            add_event(ctx, StreamId.LIVE, &e);
 
             set_tuning(key_code);
         }
@@ -653,12 +685,12 @@ void main() {
         Event e;
         e.type = EventType.EVENT_WRITE;
         e.value.d = 0.5;
-        e.target_idx = get_name_idx(ctx, 0, "fm_mod".ptr);
-        add_event(ctx, 0, &e);
+        e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_mod".ptr);
+        add_event(ctx, StreamId.LIVE, &e);
 
         e.value.d = 0.5;
-        e.target_idx = get_name_idx(ctx, 0, "fm_freq".ptr);
-        add_event(ctx, 0, &e);
+        e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_freq".ptr);
+        add_event(ctx, StreamId.LIVE, &e);
     }
 
     WebSocket ws = WebSocket(3001);

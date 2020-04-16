@@ -23,10 +23,8 @@ JSONValue serialize(T)(auto ref in T t) {
         static foreach (field_name; FieldNameTuple!T) {
             // pragma(msg, typeof(__traits(getMember, t, field_name)), "   ", __traits(identifier, __traits(getMember, t, field_name)));
             // pragma(msg, hasUDA!(__traits(getMember, t, field_name), NoSerial));
-            static if (!hasUDA!(__traits(getMember,
-                    t, field_name), NoSerial)) {
-                sObj[field_name] = serialize(
-                        __traits(getMember, t, field_name));
+            static if (!hasUDA!(__traits(getMember, t, field_name), NoSerial)) {
+                sObj[field_name] = serialize(__traits(getMember, t, field_name));
             }
         }
         return JSONValue(sObj);
@@ -63,23 +61,20 @@ void deserialize(T)(auto ref in JSONValue json, ref T t) {
     else static if (isAggregateType!T) {
         enforce(json.type() == JSONType.object);
         static foreach (field_name; FieldNameTuple!T) {
-            static if (!hasUDA!(__traits(getMember,
-                    t, field_name), NoSerial)) {
+            static if (!hasUDA!(__traits(getMember, t, field_name), NoSerial)) {
                 if (auto p = field_name in json.object) {
-                    deserialize(*p, __traits(getMember,
-                            t, field_name));
+                    deserialize(*p, __traits(getMember, t, field_name));
                 }
                 else {
                     writeln("member " ~ field_name ~ " of "
-                            ~ T.stringof
-                            ~ " not deserialized");
+                            ~ T.stringof ~ " not deserialized");
                 }
             }
         }
     }
     else static if (is(T == bool)) {
-        enforce(json.type() == JSONType.true_
-                || json.type() == JSONType.false_);
+        enforce(json.type() == JSONType.true_ || json.type() == JSONType
+                .false_);
         t = json.type() == JSONType.true_;
     }
     else static if (__traits(isIntegral, T)) {
@@ -96,10 +91,12 @@ void deserialize(T)(auto ref in JSONValue json, ref T t) {
         }
     }
     else static if (__traits(isFloating, T)) {
-        // if (json.type() == JSONType.integer) {
-        //     t = to!T(json.integer());
-        // }
-        t = to!T(json.floating());
+        if (json.type() == JSONType.integer) {
+            t = to!T(json.integer());
+        }
+        else {
+            t = to!T(json.floating());
+        }
     }
     else static if (is(T == string)) {
         t = json.str();

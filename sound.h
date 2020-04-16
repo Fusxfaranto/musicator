@@ -80,6 +80,17 @@ void add_event(
         uint stream_id,
         const Event* event);
 
+void stream_play(
+        AudioContext* ctx,
+        uint stream_id);
+void stream_pause(
+        AudioContext* ctx,
+        uint stream_id);
+void stream_scrub(
+        AudioContext* ctx,
+        uint stream_id,
+        uint to_count);
+
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);
 

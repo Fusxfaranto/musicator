@@ -58,6 +58,12 @@ typedef enum {
     EVENT_STATE_PROCESSED,
 } EventState;
 
+typedef enum {
+    STREAM_PLAYING,
+    STREAM_PAUSE_NEXT_SAMPLE,
+    STREAM_PAUSED,
+} StreamState;
+
 typedef struct {
     uint64_t c;
     // TODO remove?
@@ -81,6 +87,8 @@ typedef struct {
     uint event_buf_size;
     uint event_pos;
     atomic_uint_fast32_t event_reserved_pos;
+
+    _Atomic(StreamState) stream_state;
 } StreamData;
 
 typedef struct AudioContext {
@@ -160,6 +168,62 @@ int get_name_idx(
     return -1;
 }
 
+void stream_play(AudioContext* ctx, uint stream_id) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
+
+    for (;;) {
+        StreamState s = atomic_load(&p->stream_state);
+
+        switch (s) {
+        case STREAM_PAUSED:
+        case STREAM_PAUSE_NEXT_SAMPLE:
+            if (atomic_compare_exchange_weak(
+                        &p->stream_state,
+                        &s,
+                        STREAM_PLAYING)) {
+                return;
+            }
+            printf("stream_play xchg failed\n");
+            break;
+
+        case STREAM_PLAYING:
+            printf("stream_play called on already playing stream?\n");
+            return;
+
+        default:
+            assert(0);
+        }
+    }
+}
+
+void stream_pause(AudioContext* ctx, uint stream_id) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
+
+    for (;;) {
+        StreamState s = atomic_load(&p->stream_state);
+
+        switch (s) {
+        case STREAM_PLAYING:
+            if (atomic_compare_exchange_weak(
+                        &p->stream_state,
+                        &s,
+                        STREAM_PAUSE_NEXT_SAMPLE)) {
+                return;
+            }
+            printf("stream_pause xchg failed\n");
+            break;
+
+        case STREAM_PAUSED:
+        case STREAM_PAUSE_NEXT_SAMPLE:
+            printf("stream_pause called on already paused stream?\n");
+            return;
+
+        default:
+            assert(0);
+        }
+    }
+}
+
 static void jump_stream(StreamData* p, uint to_count) {
     p->c = to_count;
     for (;;) {
@@ -196,6 +260,26 @@ static void jump_stream(StreamData* p, uint to_count) {
     }
 }
 
+void stream_scrub(
+        AudioContext* ctx,
+        uint stream_id,
+        uint to_count) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
+    StreamState s = atomic_load(&p->stream_state);
+    switch (s) {
+        case STREAM_PAUSED:
+            jump_stream(p, to_count);
+            return;
+
+        case STREAM_PLAYING:
+        case STREAM_PAUSE_NEXT_SAMPLE:
+            // TODO handle these gracefully (probably just ignore this case)
+        default:
+            assert(0);
+    }
+}
+
+
 static uint process_events(StreamData* p, uint64_t n) {
     uint next_n;
     uint64_t end = p->c + n;
@@ -226,7 +310,7 @@ static uint process_events(StreamData* p, uint64_t n) {
             return next_n;
         }
 
-        //printf("processing event %lu\n", p->event_pos);
+        // printf("processing event %lu\n", p->event_pos);
 
         switch (e->type) {
         case EVENT_SETTER: {
@@ -408,12 +492,31 @@ static long data_cb(
     }
 
     for (uint i = 0; i < ctx->stream_data_buf_size; i++) {
-        // TODO per-stream pause state
-        generate_samples(
-                &(ctx->stream_data_buf[i]),
-                out,
-                n,
-                ctx->sample_rate);
+        StreamData* p = &(ctx->stream_data_buf[i]);
+        StreamState stream_state =
+                atomic_load(&p->stream_state);
+
+        switch (stream_state) {
+        case STREAM_PLAYING:
+            generate_samples(p, out, n, ctx->sample_rate);
+            break;
+
+        case STREAM_PAUSE_NEXT_SAMPLE: {
+            bool r = atomic_compare_exchange_strong(
+                    &p->stream_state,
+                    &stream_state,
+                    STREAM_PAUSED);
+            if (!r) {
+                printf("failed to pause in data_cb?  state changed to %d",
+                       stream_state);
+            }
+        }
+        case STREAM_PAUSED:
+            break;
+
+        default:
+            assert(0);
+        }
     }
 
     return n_signed;
