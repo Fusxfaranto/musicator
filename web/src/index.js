@@ -107,51 +107,58 @@ const Grid = props => {
 };
 
 const Chart = props => {
-    const ref = useRef();
-    const [dim, setDim] = useState({
-        width: 0,
-        height: 0,
-    });
-    const [skipStage, setSkipStage] = useState(true);
 
-    const autoSetDim = () => {
-        if (ref.current) {
-            setDim({
-                width: ref.current.offsetWidth,
-                height: ref.current.offsetHeight,
-            });
-        }
-    };
+    {
+        // const ref = useRef();
+        // const [dim, setDim] = useState({
+        //     width: 0,
+        //     height: 0,
+        // });
+        // const [skipStage, setSkipStage] = useState(true);
 
-    useEffect(() => {
-        autoSetDim();
-        setSkipStage(false);
-    }, []);
+        // const autoSetDim = () => {
+        //     if (ref.current) {
+        //         setDim({
+        //             width: ref.current.offsetWidth,
+        //             height: ref.current.offsetHeight,
+        //         });
+        //     }
+        // };
 
-    useEffect(() => {
-        let resize_timer = null;
-        const handler = () => {
-            clearInterval(resize_timer);
-            autoSetDim();
-            setSkipStage(true);
-            resize_timer = setTimeout(() => { setSkipStage(false); }, 200);
-        };
+        // useEffect(() => {
+        //     autoSetDim();
+        //     setSkipStage(false);
+        // }, []);
 
-        window.addEventListener('resize', handler);
+        // useEffect(() => {
+        //     let resize_timer = null;
+        //     const handler = () => {
+        //         clearInterval(resize_timer);
+        //         autoSetDim();
+        //         setSkipStage(true);
+        //         resize_timer = setTimeout(() => { setSkipStage(false); }, 200);
+        //     };
 
-        return () => window.removeEventListener('resize', handler);
-    }, []);
+        //     window.addEventListener('resize', handler);
 
-    const stageW = dim.width;// - 100;
-    const stageH = dim.height;// - 100;
+        //     return () => window.removeEventListener('resize', handler);
+        // }, []);
+        // const stageW = dim.width;// - 100;
+        // const stageH = dim.height;// - 100;
+    }
+
+    // TODO
+    const stageW = 3000;
+    const stageH = 2400;
 
     return (
         <div
           className="chart-container"
-          ref={ref}
           >
-          { !skipStage &&
-              <Stage width={stageW} height={stageH}>
+          { //!skipStage &&
+                  <Stage
+                        width={stageW} height={stageH}
+                             >
                     <Layer>
                           <Grid
                                 width={stageW}
@@ -462,16 +469,16 @@ const App = props => {
                       setShouldUpdate(true);
                   }}
                   />
-                <NumInput
-                  stateVal={state.tempo}
-                  updateState={(value) => {
-                      setState({
-                          ...state,
-                          tempo: value,
-                      })
-                      setShouldUpdate(true);
-                  }}
-                  />
+                  <NumInput
+                    stateVal={state.tempo}
+                    updateState={(value) => {
+                        setState({
+                            ...state,
+                            tempo: value,
+                        })
+                        setShouldUpdate(true);
+                    }}
+                    />
             </div>
             <Chart />
           </div>
