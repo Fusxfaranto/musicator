@@ -79,13 +79,10 @@ void add_event(
         AudioContext* ctx,
         uint stream_id,
         const Event* event);
+void clear_events(AudioContext* ctx, uint stream_id);
 
-void stream_play(
-        AudioContext* ctx,
-        uint stream_id);
-void stream_pause(
-        AudioContext* ctx,
-        uint stream_id);
+void stream_play(AudioContext* ctx, uint stream_id);
+void stream_pause(AudioContext* ctx, uint stream_id);
 void stream_scrub(
         AudioContext* ctx,
         uint stream_id,

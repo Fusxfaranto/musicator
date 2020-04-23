@@ -143,6 +143,10 @@ struct WebSocket {
         server.close();
     }
 
+    bool is_connected() const {
+        return connection && connection.isAlive;
+    }
+
     private const(char)[] rawRecv(size_t recv_start) {
         auto n = connection.receive(buf[recv_start .. $]);
         if (n == Socket.ERROR) {

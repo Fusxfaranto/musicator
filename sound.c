@@ -138,6 +138,27 @@ void add_event(
     assert(old_state != EVENT_STATE_READY);
 }
 
+void clear_events(AudioContext* ctx, uint stream_id) {
+    StreamData* p = &(ctx->stream_data_buf[stream_id]);
+    StreamState s = atomic_load(&p->stream_state);
+    switch (s) {
+    case STREAM_PAUSED:
+        for (uint i = 0; i < p->event_buf_size; i++) {
+            atomic_store(
+                    &p->event_state_buf[i],
+                    EVENT_STATE_UNINITIALIZED);
+        }
+        atomic_store(&p->event_reserved_pos, 0);
+        return;
+
+    case STREAM_PLAYING:
+    case STREAM_PAUSE_NEXT_SAMPLE:
+        // TODO these cases can probably be allowed?
+    default:
+        assert(0);
+    }
+}
+
 // TODO this particularly super unthreadsafe, but that's
 // fine for now as long as the stream thread never touches
 // names
@@ -267,18 +288,18 @@ void stream_scrub(
     StreamData* p = &(ctx->stream_data_buf[stream_id]);
     StreamState s = atomic_load(&p->stream_state);
     switch (s) {
-        case STREAM_PAUSED:
-            jump_stream(p, to_count);
-            return;
+    case STREAM_PAUSED:
+        jump_stream(p, to_count);
+        return;
 
-        case STREAM_PLAYING:
-        case STREAM_PAUSE_NEXT_SAMPLE:
-            // TODO handle these gracefully (probably just ignore this case)
-        default:
-            assert(0);
+    case STREAM_PLAYING:
+    case STREAM_PAUSE_NEXT_SAMPLE:
+        // TODO handle these gracefully (probably just
+        // ignore this case)
+    default:
+        assert(0);
     }
 }
-
 
 static uint process_events(StreamData* p, uint64_t n) {
     uint next_n;

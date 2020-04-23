@@ -1,4 +1,4 @@
-import std.algorithm : max, move, swap;
+import std.algorithm : max, move, sort, swap;
 import std.array : appender;
 import std.conv : to;
 import std.datetime : dur;
@@ -67,15 +67,34 @@ struct State {
         Var[] locals;
         string prog;
         @NoSerial CompiledProg compiled;
+
+        struct ProgEvent {
+            enum Type {
+                ON,
+                OFF,
+            }
+
+            Type type;
+            ulong at_count;
+
+            // TODO these won't apply to everything, figure
+            // out something cleaner?
+            ubyte midi_note;
+            ubyte midi_velocity;
+        }
+        // TODO descriptions of on/off/? events
+        ProgEvent[] track_events;
     }
 
     string prog_helpers;
     Prog[] progs;
     int midi_prog_idx;
 
+    // TODO snap modes
     int snap_denominator;
     // TODO make tempo event-based, so it can be dynamic
     int tempo;
+    @NoSerial ulong last_snap;
 }
 
 struct MidiControl {
@@ -99,10 +118,10 @@ __gshared {
     bool midi_suspend = false;
     Tuning tuning = Tuning.ET12;
 
-    Event[] event_queue;
-
     MidiControl last_changed_controller;
 
+    // TODO more precise updates
+    bool ws_should_update;
     State gstate;
 }
 
@@ -224,44 +243,77 @@ void set_tuning(int key_code) {
     }
 }
 
-void register_live_event(Event e) {
-    // TODO stream id
-    add_event(ctx, StreamId.LIVE, &e);
-    event_queue ~= e;
+// TODO modes
+// TODO this should differentiate between up/down
+ulong note_snap() {
+    double tempo_secs = gstate.tempo / 60.0;
+    double snap_samples = (sample_rate / tempo_secs) / gstate.snap_denominator;
+    gstate.last_snap += to!ulong(round(snap_samples));
+    writeln(gstate.last_snap);
+    return gstate.last_snap;
 }
 
-// TODO define these dynamically
+void register_to_track(StreamId id, ref in State.Prog.ProgEvent prog_e) {
+    Event e;
+
+    // TODO define these dynamically based on prog (which will need to be input to this fn)
+    final switch (prog_e.type) {
+    case State.Prog.ProgEvent.Type.ON:
+        e.type = EventType.EVENT_WRITE;
+        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                format("test_note%s.volume", prog_e.midi_note).ptr);
+        e.value.d = prog_e.midi_velocity / 128.;
+        add_event(ctx, StreamId.LIVE, &e);
+
+        e = Event.init;
+        e.type = EventType.EVENT_WRITE_TIME;
+        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                format("test_note%s.started_at", prog_e.midi_note).ptr);
+        add_event(ctx, StreamId.LIVE, &e);
+
+        e = Event.init;
+        e.type = EventType.EVENT_SETTER;
+        e.setter = ValueSetter(
+                gstate.progs[gstate.midi_prog_idx].compiled.fn,
+                key_local_idxs[prog_e.midi_note].ptr,
+                0, get_key_idx(prog_e.midi_note));
+        add_event(ctx, StreamId.LIVE, &e);
+        return;
+
+    case State.Prog.ProgEvent.Type.OFF:
+        e.type = EventType.EVENT_WRITE_TIME;
+        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                format("test_note%s.released_at", prog_e.midi_note).ptr);
+        add_event(ctx, StreamId.LIVE, &e);
+        return;
+    }
+}
+
 void register_note_down(ubyte midi_note, ubyte midi_velocity) {
-    Event e;
-    e.type = EventType.EVENT_WRITE;
-    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
-                                format("test_note%s.volume",
-                                       midi_note).ptr);
-    e.value.d = midi_velocity / 128.;
-    register_live_event(e);
+    // TODO should take prog id as arg
+    // TODO sorting?
+    State.Prog.ProgEvent prog_e;
+    prog_e.type = State.Prog.ProgEvent.Type.ON;
+    prog_e.at_count = note_snap();
+    prog_e.midi_note = midi_note;
+    prog_e.midi_velocity = midi_velocity;
+    gstate.progs[0].track_events ~= prog_e;
+    register_to_track(StreamId.LIVE, prog_e);
 
-    e = Event.init;
-    e.type = EventType.EVENT_WRITE_TIME;
-    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
-                                format("test_note%s.started_at",
-                                       midi_note).ptr);
-    register_live_event(e);
-
-    e = Event.init;
-    e.type = EventType.EVENT_SETTER;
-    e.setter = ValueSetter(gstate
-                           .progs[gstate.midi_prog_idx].compiled.fn,
-                           key_local_idxs[midi_note].ptr,
-                           0, get_key_idx(midi_note));
-    register_live_event(e);
+    ws_should_update = true;
 }
+
 void register_note_up(ubyte midi_note) {
-    Event e;
-    e.type = EventType.EVENT_WRITE_TIME;
-    e.target_idx = get_name_idx(ctx, StreamId.LIVE,
-                                format("test_note%s.released_at",
-                                       midi_note).ptr);
-    register_live_event(e);
+    // TODO todos in register_note_down apply
+    State.Prog.ProgEvent prog_e;
+    prog_e.type = State.Prog.ProgEvent.Type.OFF;
+    prog_e.at_count = note_snap();
+    prog_e.midi_note = midi_note;
+    prog_e.midi_velocity = 0;
+    gstate.progs[0].track_events ~= prog_e;
+    register_to_track(StreamId.LIVE, prog_e);
+
+    ws_should_update = true;
 }
 
 void handle_midi_message(const ubyte[] message) {
@@ -337,8 +389,8 @@ void handle_midi_message(const ubyte[] message) {
                         Event e;
                         e.type = EventType.EVENT_WRITE;
                         e.value.d = fraction;
-                        e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_freq"
-                                .ptr);
+                        e.target_idx = get_name_idx(ctx,
+                                StreamId.LIVE, "fm_freq".ptr);
                         add_event(ctx, StreamId.LIVE, &e);
                     }
                     break;
@@ -358,7 +410,8 @@ void handle_midi_message(const ubyte[] message) {
                         e.type = EventType.EVENT_WRITE;
                         e.value.d = 1;
                         for (int i = 0; i < 128; i++) {
-                            e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                            e.target_idx = get_name_idx(ctx,
+                                    StreamId.LIVE,
                                     format("test_note%s.pitch_offset_19",
                                         i).ptr);
                             add_event(ctx, StreamId.LIVE, &e);
@@ -384,7 +437,8 @@ void handle_midi_message(const ubyte[] message) {
                         e.type = EventType.EVENT_WRITE_TIME;
                         for (int i = 0; i < 128; i++) {
                             if (!key_held[i] && key_held_soft[i]) {
-                                e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+                                e.target_idx = get_name_idx(ctx,
+                                        StreamId.LIVE,
                                         format("test_note%s.released_at",
                                             i).ptr);
                                 add_event(ctx, StreamId.LIVE, &e);
@@ -411,7 +465,8 @@ void handle_midi_message(const ubyte[] message) {
             Event e;
             e.type = EventType.EVENT_WRITE;
             e.value.d = fraction;
-            e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_mod".ptr);
+            e.target_idx = get_name_idx(ctx, StreamId.LIVE, "fm_mod"
+                    .ptr);
             add_event(ctx, StreamId.LIVE, &e);
             break;
 
@@ -423,6 +478,23 @@ void handle_midi_message(const ubyte[] message) {
     }
     else {
         Thread.sleep(dur!"msecs"(10));
+    }
+}
+
+// TODO could optimize
+void requeue_track_events() {
+    clear_events(ctx, StreamId.TRACK);
+
+    State.Prog.ProgEvent[] prog_es;
+
+    foreach (ref prog; gstate.progs) {
+        prog_es ~= prog.track_events;
+    }
+
+    prog_es.sort!("a.at_count < b.at_count");
+
+    foreach (ref pe; prog_es) {
+        register_to_track(StreamId.TRACK, pe);
     }
 }
 
@@ -448,13 +520,19 @@ struct WSMessage {
     }
 }
 
-void send_state(ref WebSocket ws, ref WSMessage message) {
+void send_state(ref WebSocket ws) {
+    WSMessage message;
     message.type = "set";
     message.contents = serialize(gstate);
     ws.send(serialize(message).toString());
 }
 
 void process_ws(ref WebSocket ws) {
+    if (ws_should_update && ws.is_connected()) {
+        send_state(ws);
+        ws_should_update = false;
+    }
+
     const(char[]) ws_recv = ws.recv();
     if (!ws_recv) {
         return;
@@ -469,7 +547,7 @@ void process_ws(ref WebSocket ws) {
     //writeln(message);
 
     if (message.type == "getstate") {
-        send_state(ws, message);
+        send_state(ws);
     }
     else if (message.type == "setstate") {
         deserialize(message.contents, gstate);
@@ -487,10 +565,11 @@ void process_ws(ref WebSocket ws) {
         deserialize(message.contents, params);
         load_state(params.filename);
 
-        send_state(ws, message);
+        send_state(ws);
     }
     else if (message.type == "play") {
         // TODO stream id
+        requeue_track_events();
         stream_play(ctx, StreamId.LIVE);
     }
     else if (message.type == "pause") {
@@ -650,7 +729,8 @@ void main() {
             key_local_idxs[i] = new int[local_names.length + global_names
                 .length];
             static foreach (j, name; local_names) {
-                key_local_idxs[i][j] = get_name_idx(ctx, StreamId.LIVE,
+                key_local_idxs[i][j] = get_name_idx(ctx,
+                        StreamId.LIVE,
                         format("test_note%s.%s", i, name).ptr);
             }
 

@@ -41,6 +41,8 @@ JSONValue serialize(T)(auto ref in T t) {
 void deserialize(T)(auto ref in JSONValue json, ref T t) {
     //writeln(json, '\t', json.type);
     static if (is(T == U*, U)) {
+        pragma(msg, T);
+        pragma(msg, U);
         static assert(0);
     }
     else static if (is(T == JSONValue)) {
@@ -105,7 +107,7 @@ void deserialize(T)(auto ref in JSONValue json, ref T t) {
         static if (isDynamicArray!T) {
             t.length = json.array().length;
         }
-        foreach (int i, JSONValue v; json.array()) {
+        foreach (size_t i, JSONValue v; json.array()) {
             deserialize(v, t[i]);
         }
     }

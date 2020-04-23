@@ -35,12 +35,8 @@ const Foo = props => {
           radius={10}
           draggable
           fill={dragging ? 'green' : 'red'}
-          // TODO setting onMouseDown seems to cause problems
-          onMouseDown={() => {
+          onDragStart={() => {
               setDragging(true);
-          }}
-          onMouseUp={() => {
-              setDragging(false);
           }}
           onDragEnd={e => {
               console.log(e.target.x(), e.target.y());
@@ -48,6 +44,7 @@ const Foo = props => {
                   x: e.target.x(),
                   y: e.target.y()
               });
+              setDragging(false);
           }}
           /* onDragMove={e => { */
           /*     //console.log(e); */
@@ -61,6 +58,22 @@ const Foo = props => {
           }}
           />);
 };
+
+
+const GridNote = props => {
+    // TODO
+    const x = props.prog_event.at_count / 44;
+    const y = 100;
+
+    return (
+        <Circle
+          x={x}
+          y={y}
+          radius={10}
+          fill={'blue'}
+          />);
+};
+
 
 const GridDir = Object.freeze({
     v: Symbol("GridDir.v"),
@@ -107,7 +120,6 @@ const Grid = props => {
 };
 
 const Chart = props => {
-
     {
         // const ref = useRef();
         // const [dim, setDim] = useState({
@@ -151,6 +163,41 @@ const Chart = props => {
     const stageW = 3000;
     const stageH = 2400;
 
+    let stage_elems = [];
+    stage_elems.push(
+        <Grid
+          width={stageW}
+          height={stageH}
+          dir={GridDir.v}
+          span={50}
+          key='grid_v'
+          />);
+    stage_elems.push(
+        <Grid
+          width={stageW}
+          height={stageH}
+          dir={GridDir.h}
+          span={50}
+          key='grid_h'
+          />);
+    stage_elems.push(
+        <Foo
+          stageWidth={stageW}
+          stageHeight={stageH}
+          key='foo'
+          />);
+
+    for (let i = 0; i < props.state.progs.length; i++) {
+        const prog = props.state.progs[i];
+        for (let j = 0; j < prog.track_events.length; j++) {
+            stage_elems.push(
+                <GridNote
+                  prog_event={prog.track_events[j]}
+                  />);
+            console.log(prog.track_events[j]);
+        }
+    }
+
     return (
         <div
           className="chart-container"
@@ -158,27 +205,12 @@ const Chart = props => {
           { //!skipStage &&
                   <Stage
                         width={stageW} height={stageH}
-                             >
-                    <Layer>
-                          <Grid
-                                width={stageW}
-                                height={stageH}
-                                dir={GridDir.v}
-                                span={50}
-                                />
-                              <Grid
-                                    width={stageW}
-                                    height={stageH}
-                                    dir={GridDir.h}
-                                    span={50}
-                                    />
-                                  <Foo
-                                        stageWidth={stageW}
-                                        stageHeight={stageH}
-                                        />
-                        </Layer>
-                  </Stage>
-              }
+                        >
+                        <Layer>
+                              {stage_elems}
+                            </Layer>
+                      </Stage>
+                  }
         </div>
     );
 };
@@ -480,7 +512,9 @@ const App = props => {
                     }}
                     />
             </div>
-            <Chart />
+            <Chart
+              state={state}
+              />
           </div>
         </div>
     );
