@@ -75,10 +75,12 @@ struct State {
             }
 
             Type type;
-            ulong at_count;
+            double at_time;
 
             // TODO these won't apply to everything, figure
             // out something cleaner?
+            // incl adding separate channel field instead of
+            // just using midi_note
             ubyte midi_note;
             ubyte midi_velocity;
         }
@@ -94,7 +96,7 @@ struct State {
     int snap_denominator;
     // TODO make tempo event-based, so it can be dynamic
     int tempo;
-    @NoSerial ulong last_snap;
+    double last_snap;
 }
 
 struct MidiControl {
@@ -108,7 +110,7 @@ struct MidiControl {
 
 __gshared {
     AudioContext* ctx;
-    uint sample_rate;
+    //ulong sample_rate;
     int[][128] key_local_idxs;
 
     bool[128] key_held = false;
@@ -245,11 +247,9 @@ void set_tuning(int key_code) {
 
 // TODO modes
 // TODO this should differentiate between up/down
-ulong note_snap() {
+double note_snap() {
     double tempo_secs = gstate.tempo / 60.0;
-    double snap_samples = (sample_rate / tempo_secs) / gstate.snap_denominator;
-    gstate.last_snap += to!ulong(round(snap_samples));
-    writeln(gstate.last_snap);
+    gstate.last_snap += 1 / (gstate.snap_denominator * tempo_secs);
     return gstate.last_snap;
 }
 
@@ -294,7 +294,7 @@ void register_note_down(ubyte midi_note, ubyte midi_velocity) {
     // TODO sorting?
     State.Prog.ProgEvent prog_e;
     prog_e.type = State.Prog.ProgEvent.Type.ON;
-    prog_e.at_count = note_snap();
+    prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
     prog_e.midi_velocity = midi_velocity;
     gstate.progs[0].track_events ~= prog_e;
@@ -307,7 +307,7 @@ void register_note_up(ubyte midi_note) {
     // TODO todos in register_note_down apply
     State.Prog.ProgEvent prog_e;
     prog_e.type = State.Prog.ProgEvent.Type.OFF;
-    prog_e.at_count = note_snap();
+    prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
     prog_e.midi_velocity = 0;
     gstate.progs[0].track_events ~= prog_e;
@@ -491,7 +491,7 @@ void requeue_track_events() {
         prog_es ~= prog.track_events;
     }
 
-    prog_es.sort!("a.at_count < b.at_count");
+    prog_es.sort!("a.at_time < b.at_time");
 
     foreach (ref pe; prog_es) {
         register_to_track(StreamId.TRACK, pe);
@@ -505,6 +505,8 @@ void rebuild_state() {
 }
 
 void load_state(string filename) {
+    gstate = State.init;
+
     JSONValue j = parseJSON(readText(filename));
     deserialize(j, gstate);
 
@@ -707,7 +709,7 @@ void main() {
     scope (exit)
         enforce(stop_audio(ctx) == 0);
 
-    sample_rate = cast(uint)get_sample_rate(ctx);
+    //sample_rate = get_sample_rate(ctx);
 
     // TODO
     load_state("state.json");

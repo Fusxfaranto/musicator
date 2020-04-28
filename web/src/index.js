@@ -4,7 +4,7 @@ import AceEditor from "react-ace-builds";
 import React, { useRef, useEffect, useState } from 'react';
 //import Konva from 'konva';
 import { render } from 'react-dom';
-import { Circle, Stage, Layer, Line } from 'react-konva';
+import { Circle, Stage, Layer, Line, Rect } from 'react-konva';
 
 
 import 'ace-builds/src-noconflict/mode-c_cpp';
@@ -17,13 +17,105 @@ Math.clamp = function(number, min, max) {
     return Math.max(min, Math.min(number, max));
 };
 
+const assert = b => {
+    if (b) {
+    } else {
+        throw new Error("assert");
+    }
+};
 
 // TODO note input by simultaneously tapping out beat and playing notes, with configurable snap intervals (which will require having tempo integration)
 
+const keyScale = 15;
+const keyWidth = 60;
+
+const timeToX = time => {
+    return time * 500;
+}
+const midiNoteToY = midiNote => {
+    return (127 - midiNote) * keyScale;
+}
+const gridStart = () => {
+    return keyWidth;
+}
+
+const gridNoteRadius = 7;
+
+const GridNote = props => {
+    return (
+        <Circle
+          x={props.x}
+          y={props.y}
+          radius={gridNoteRadius}
+          fill='#eeee22'
+          />);
+};
+
+const GridNoteConnector = props => {
+    return (
+        <Rect
+          x={props.x}
+          y={props.y - gridNoteRadius}
+          width={props.width}
+          height={gridNoteRadius * 2}
+          fill='#888822'
+          />);
+}
+
+const GridItem = props => {
+    assert(props.progEvents.length >= 1);
+
+    let items = [];
+    let firstX = undefined;
+    let lastX = undefined;
+    let lastY = undefined;
+    for (let i = 0; i < props.progEvents.length; i++) {
+        let e = props.progEvents[i];
+
+        // TODO
+        const x = timeToX(e.at_time) + gridStart();
+        const y = midiNoteToY(e.midi_note);
+
+        if (i === 0) {
+            firstX = x;
+        }
+
+        if (lastY !== y) {
+            if (lastY !== undefined) {
+                // TODO
+                console.error("inconsistent y");
+            }
+            lastY = y;
+        }
+        lastX = x;
+
+        items.push(
+            <GridNote
+              x={x}
+              y={y}
+              key={["GridNote", props.progId, e.midi_note, e.at_time]}
+              />);
+    }
+
+    items.push(
+        <GridNoteConnector
+          x={firstX}
+          y={lastY}
+          width={lastX - firstX}
+          key={["GridNoteConnector", props.progId, props.progEvents[0].midi_note, props.progEvents[0].at_time]}
+          />);
+
+    return (
+        <>
+          {items.reverse()}
+        </>
+    );
+}
+
 const Foo = props => {
     const [state, setState] = useState({
-        x: 50,
-        y: 50
+        x: 200,
+        y: 200
     });
 
     const [dragging, setDragging] = useState(false);
@@ -33,47 +125,53 @@ const Foo = props => {
           x={state.x}
           y={state.y}
           radius={10}
-          draggable
+          draggable={true}
           fill={dragging ? 'green' : 'red'}
           onDragStart={() => {
               setDragging(true);
           }}
           onDragEnd={e => {
               console.log(e.target.x(), e.target.y());
-              setState({
-                  x: e.target.x(),
-                  y: e.target.y()
-              });
+              // setState({
+              //     x: e.target.x(),
+              //     y: e.target.y()
+              // });
               setDragging(false);
           }}
-          /* onDragMove={e => { */
-          /*     //console.log(e); */
-          /* }} */
+          // onDragMove={e => {
+          //     //console.log(e);
+          // }}
           dragBoundFunc={pos => {
               //console.log(pos);
+
+              let x = Math.round(pos.x / 50.0) * 50;
+              let y = Math.round(pos.y / 50.0) * 50;
               return {
-                  x: Math.clamp(pos.x, 0, props.stageWidth),
-                  y: Math.clamp(pos.y, 0, props.stageHeight),
+                  x: Math.clamp(x, 0, props.stageWidth),
+                  y: Math.clamp(y, 0, props.stageHeight),
               };
           }}
           />);
 };
 
-
-const GridNote = props => {
-    // TODO
-    const x = props.prog_event.at_count / 44;
-    const y = 100;
+const keyIsWhite = midiNote => {
+    const rel_note = (midiNote + (128 * 12) - 72) % 12;
+    return rel_note !== 1 && rel_note !== 3 && rel_note !== 6 && rel_note !== 8 && rel_note !== 10;
+}
+const GridKeyVisual = props => {
+    const fill = keyIsWhite(props.midiNote) ? 'white' : 'black';
 
     return (
-        <Circle
-          x={x}
-          y={y}
-          radius={10}
-          fill={'blue'}
-          />);
-};
-
+        <Rect
+          x={0}
+          y={midiNoteToY(props.midiNote)}
+          width={keyWidth}
+          height={keyScale}
+          fill={fill}
+          stroke="gray"
+          />
+    );
+}
 
 const GridDir = Object.freeze({
     v: Symbol("GridDir.v"),
@@ -96,20 +194,29 @@ const Grid = props => {
         let points = (() => {
             switch (props.dir) {
             case GridDir.v:
-                return [i, 0, i, props.height];
+                return [i + gridStart(), 0, i + gridStart(), props.height];
             case GridDir.h:
                 return [0, i, props.width, i];
             default:
                 return null;
             }
         })();
-        elems.push(<Line
-                   points={points}
-                   stroke='gray'
-                   strokeWidth={1}
-                   // TODO ??
-                   key={i}
-                   />);
+        elems.push(
+            <Line
+              points={points}
+              stroke={props.color}
+              strokeWidth={1}
+              // TODO ??
+              key={i}
+              />);
+    }
+
+    for (let i = 0; i < 128; i++) {
+        elems.push(
+            <GridKeyVisual
+              midiNote={i}
+              key={['GridKeyVisual', i]}
+              />);
     }
 
     return (
@@ -163,39 +270,74 @@ const Chart = props => {
     const stageW = 3000;
     const stageH = 2400;
 
-    let stage_elems = [];
-    stage_elems.push(
+    const tempoSecs = props.state.tempo / 60.0;
+    const beatSpacing = timeToX(1 / tempoSecs);
+
+    let stageElems = [];
+    stageElems.push(
         <Grid
           width={stageW}
           height={stageH}
           dir={GridDir.v}
-          span={50}
-          key='grid_v'
+          span={beatSpacing / props.state.snap_denominator}
+          key='grid_v_sub'
+          color='#333333'
           />);
-    stage_elems.push(
+    stageElems.push(
+        <Grid
+          width={stageW}
+          height={stageH}
+          dir={GridDir.v}
+          span={beatSpacing}
+          key='grid_v'
+          color='gray'
+          />);
+    stageElems.push(
         <Grid
           width={stageW}
           height={stageH}
           dir={GridDir.h}
-          span={50}
+          span={keyScale}
           key='grid_h'
+          color='gray'
           />);
-    stage_elems.push(
+    stageElems.push(
         <Foo
           stageWidth={stageW}
           stageHeight={stageH}
           key='foo'
           />);
 
+    let gridItems = [];
     for (let i = 0; i < props.state.progs.length; i++) {
         const prog = props.state.progs[i];
+        // TODO should be derived from prog
+        const numChannels = 128;
+        let channelEvents = [...Array(numChannels)].map(a => []);
         for (let j = 0; j < prog.track_events.length; j++) {
-            stage_elems.push(
-                <GridNote
-                  prog_event={prog.track_events[j]}
-                  />);
-            console.log(prog.track_events[j]);
+            let e = prog.track_events[j];
+            switch (e.type) {
+            case 'ON':
+                assert(channelEvents[e.midi_note].length === 0);
+                channelEvents[e.midi_note].push(e);
+                break;
+            case 'OFF':
+                assert(channelEvents[e.midi_note].length > 0);
+                channelEvents[e.midi_note].push(e);
+                gridItems.push(
+                    <GridItem
+                      progId={i}
+                      progEvents={channelEvents[e.midi_note]}
+                      key={['GridItem', channelEvents[e.midi_note][0].at_time, i]}
+                      />);
+                channelEvents[e.midi_note] = [];
+                break;
+            default:
+                throw new Error("");
+            }
+            //console.log(prog.track_events[j]);
         }
+        //console.log(channelEvents);
     }
 
     return (
@@ -207,7 +349,8 @@ const Chart = props => {
                         width={stageW} height={stageH}
                         >
                         <Layer>
-                              {stage_elems}
+                              {stageElems}
+                                  {gridItems}
                             </Layer>
                       </Stage>
                   }
@@ -321,12 +464,18 @@ const ProgMenu = props => {
 const NumInput = props => {
     const [inputState, setInputState] = useState(null);
 
-    if (props.stateVal && inputState === null) {
+    if (props.stateVal !== undefined && inputState === null) {
         setInputState(props.stateVal);
     }
 
-    //console.log(props.stateVal);
-    console.log(inputState);
+    useEffect(() => {
+        // reset when reloading
+        if (props.stateVal !== undefined && props.stateVal !== inputState) {
+            setInputState(props.stateVal);
+        }
+    }, [inputState, props.stateVal]);
+
+    //console.log('asdf', props.stateVal, inputState);
     return (
         <input
           type="number"
@@ -490,6 +639,8 @@ const App = props => {
                   Play
                 </button>
 
+                <br />
+                <br />
 
                 <NumInput
                   stateVal={state.snap_denominator}

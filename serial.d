@@ -3,6 +3,7 @@ import std.array : array;
 import std.conv : to;
 import std.exception : enforce;
 import std.json : JSONValue, JSONType, JSONException;
+import std.math : isNaN;
 import std.traits : EnumMembers, isAggregateType,
     isDynamicArray, hasUDA, FieldNameTuple, isUnsigned;
 import std.stdio : writeln;
@@ -14,6 +15,13 @@ enum NoSerial;
 JSONValue serialize(T)(auto ref in T t) {
     static if (is(T == enum)) {
         return JSONValue(to!string(t));
+    }
+    else static if (__traits(isFloating, T)) {
+        if (isNaN(t)) {
+            writeln("WARNING: serializing NaN as 0");
+            return JSONValue(0.0);
+        }
+        return JSONValue(t);
     }
     else static if (__traits(compiles, JSONValue(t))) {
         return JSONValue(t);
