@@ -31,21 +31,77 @@ const keyWidth = 60;
 
 const timeToX = time => {
     return time * 500;
-}
+};
+const xToTime = x => {
+    return x / 500;
+};
 const midiNoteToY = midiNote => {
     return (127 - midiNote) * keyScale;
-}
+};
+const yToMidiNote = y => {
+    return 127 - (y / keyScale);
+};
 const gridStart = () => {
     return keyWidth;
-}
+};
 
 const gridNoteRadius = 7;
 
+
 const GridNote = props => {
+    let draggable;
+    let dragBoundFunc = null;
+    //let onDragStart = null;
+    let onDragEnd = null;
+
+    let time = xToTime(props.x);
+    let midiNote = yToMidiNote(props.y);
+    assert(midiNote === Math.round(midiNote));
+
+    switch (props.noteType) {
+    case 'ON':
+        draggable = true;
+        dragBoundFunc = pos => {
+            //console.log(pos);
+            const snap = (v, b, s) => {
+                return Math.round((v - s) / b) * b + s;
+            };
+            let x = snap(pos.x, props.stageProps.beatSubSpacing, gridStart());
+            let y = snap(pos.y, keyScale, 0);
+            return {
+                x: Math.clamp(x, gridStart(), props.stageProps.width),
+                y: Math.clamp(y, 0, props.stageProps.height),
+            };
+        };
+
+        onDragEnd = e => {
+            let x = e.target.x();
+            let y = e.target.y();
+
+            if (x !== props.x || y !== props.y) {
+                props.shiftEvents(xToTime(x) - time, yToMidiNote(y) - midiNote);
+            }
+
+            //setDragging(false);
+        };
+        break;
+
+    case 'OFF':
+        draggable = false;
+        break;
+
+    default:
+        assert(0);
+    }
+
+
     return (
         <Circle
           x={props.x}
           y={props.y}
+          draggable={draggable}
+          dragBoundFunc={dragBoundFunc}
+          onDragEnd={onDragEnd}
           radius={gridNoteRadius}
           fill='#eeee22'
           />);
@@ -58,12 +114,38 @@ const GridNoteConnector = props => {
           y={props.y - gridNoteRadius}
           width={props.width}
           height={gridNoteRadius * 2}
-          fill='#888822'
+          fill='#aaaa22'
           />);
-}
+};
 
 const GridItem = props => {
     assert(props.progEvents.length >= 1);
+
+    let shiftEvents = (time, midiNote) => {
+        let es = props.progEvents;
+        const esBackupStr = JSON.stringify(es);
+        console.log(es);
+        console.log(time);
+        console.log(midiNote);
+        for (let i = 0; i < es.length; i++) {
+            es[i].at_time += time;
+            es[i].midi_note += midiNote;
+            assert(es[i].at_time >= 0);
+            assert(es[i].midi_note >= 0);
+            assert(es[i].midi_note < 128);
+        }
+
+        let r = props.updateEvents();
+
+        if (r === false) {
+            console.log("rolling back bad shift");
+            const esBackup = JSON.parse(esBackupStr);
+            console.log(esBackup);
+            for (let i = 0; i < es.length; i++) {
+                es[i] = esBackup[i];
+            }
+        }
+    };
 
     let items = [];
     let firstX = undefined;
@@ -93,7 +175,10 @@ const GridItem = props => {
             <GridNote
               x={x}
               y={y}
+              noteType={e.type}
               key={["GridNote", props.progId, e.midi_note, e.at_time]}
+              stageProps={props.stageProps}
+              shiftEvents={shiftEvents}
               />);
     }
 
@@ -110,54 +195,12 @@ const GridItem = props => {
           {items.reverse()}
         </>
     );
-}
-
-const Foo = props => {
-    const [state, setState] = useState({
-        x: 200,
-        y: 200
-    });
-
-    const [dragging, setDragging] = useState(false);
-
-    return (
-        <Circle
-          x={state.x}
-          y={state.y}
-          radius={10}
-          draggable={true}
-          fill={dragging ? 'green' : 'red'}
-          onDragStart={() => {
-              setDragging(true);
-          }}
-          onDragEnd={e => {
-              console.log(e.target.x(), e.target.y());
-              // setState({
-              //     x: e.target.x(),
-              //     y: e.target.y()
-              // });
-              setDragging(false);
-          }}
-          // onDragMove={e => {
-          //     //console.log(e);
-          // }}
-          dragBoundFunc={pos => {
-              //console.log(pos);
-
-              let x = Math.round(pos.x / 50.0) * 50;
-              let y = Math.round(pos.y / 50.0) * 50;
-              return {
-                  x: Math.clamp(x, 0, props.stageWidth),
-                  y: Math.clamp(y, 0, props.stageHeight),
-              };
-          }}
-          />);
 };
 
 const keyIsWhite = midiNote => {
     const rel_note = (midiNote + (128 * 12) - 72) % 12;
     return rel_note !== 1 && rel_note !== 3 && rel_note !== 6 && rel_note !== 8 && rel_note !== 10;
-}
+};
 const GridKeyVisual = props => {
     const fill = keyIsWhite(props.midiNote) ? 'white' : 'black';
 
@@ -171,7 +214,7 @@ const GridKeyVisual = props => {
           stroke="gray"
           />
     );
-}
+};
 
 const GridDir = Object.freeze({
     v: Symbol("GridDir.v"),
@@ -226,109 +269,73 @@ const Grid = props => {
     );
 };
 
-const Chart = props => {
-    {
-        // const ref = useRef();
-        // const [dim, setDim] = useState({
-        //     width: 0,
-        //     height: 0,
-        // });
-        // const [skipStage, setSkipStage] = useState(true);
+const genChannelEventsMap = (prog) => {
+    // TODO should be derived from prog
+    const numChannels = 128;
+    return [...Array(numChannels)].map(a => []);
+};
 
-        // const autoSetDim = () => {
-        //     if (ref.current) {
-        //         setDim({
-        //             width: ref.current.offsetWidth,
-        //             height: ref.current.offsetHeight,
-        //         });
-        //     }
-        // };
+const isTrackEventsValid = (prog) => {
+    return true;
 
-        // useEffect(() => {
-        //     autoSetDim();
-        //     setSkipStage(false);
-        // }, []);
-
-        // useEffect(() => {
-        //     let resize_timer = null;
-        //     const handler = () => {
-        //         clearInterval(resize_timer);
-        //         autoSetDim();
-        //         setSkipStage(true);
-        //         resize_timer = setTimeout(() => { setSkipStage(false); }, 200);
-        //     };
-
-        //     window.addEventListener('resize', handler);
-
-        //     return () => window.removeEventListener('resize', handler);
-        // }, []);
-        // const stageW = dim.width;// - 100;
-        // const stageH = dim.height;// - 100;
+    let channelEvents = genChannelEventsMap(prog);
+    for (let j = 0; j < prog.track_events.length; j++) {
+        let e = prog.track_events[j];
+        switch (e.type) {
+        case 'ON':
+            if (channelEvents[e.midi_note].length > 0) {
+                return false;
+            }
+            channelEvents[e.midi_note].push(e);
+            break;
+        case 'OFF':
+            if (channelEvents[e.midi_note].length <= 0) {
+                return false;
+            }
+            channelEvents[e.midi_note] = [];
+            break;
+        default:
+            return false;
+        }
     }
 
-    // TODO
-    const stageW = 3000;
-    const stageH = 2400;
+    return true;
+};
 
-    const tempoSecs = props.state.tempo / 60.0;
-    const beatSpacing = timeToX(1 / tempoSecs);
-
-    let stageElems = [];
-    stageElems.push(
-        <Grid
-          width={stageW}
-          height={stageH}
-          dir={GridDir.v}
-          span={beatSpacing / props.state.snap_denominator}
-          key='grid_v_sub'
-          color='#333333'
-          />);
-    stageElems.push(
-        <Grid
-          width={stageW}
-          height={stageH}
-          dir={GridDir.v}
-          span={beatSpacing}
-          key='grid_v'
-          color='gray'
-          />);
-    stageElems.push(
-        <Grid
-          width={stageW}
-          height={stageH}
-          dir={GridDir.h}
-          span={keyScale}
-          key='grid_h'
-          color='gray'
-          />);
-    stageElems.push(
-        <Foo
-          stageWidth={stageW}
-          stageHeight={stageH}
-          key='foo'
-          />);
-
+const genGridItems = (progs, stageProps, updateField) => {
     let gridItems = [];
-    for (let i = 0; i < props.state.progs.length; i++) {
-        const prog = props.state.progs[i];
-        // TODO should be derived from prog
-        const numChannels = 128;
-        let channelEvents = [...Array(numChannels)].map(a => []);
+    for (let i = 0; i < progs.length; i++) {
+        const prog = progs[i];
+        let channelEvents = genChannelEventsMap(prog);
         for (let j = 0; j < prog.track_events.length; j++) {
             let e = prog.track_events[j];
             switch (e.type) {
             case 'ON':
-                assert(channelEvents[e.midi_note].length === 0);
+                if (channelEvents[e.midi_note].length !== 0) {
+                    console.log(channelEvents);
+                    console.log(e);
+                    assert(0);
+                }
                 channelEvents[e.midi_note].push(e);
                 break;
             case 'OFF':
                 assert(channelEvents[e.midi_note].length > 0);
                 channelEvents[e.midi_note].push(e);
+                const updateEvents = () => {
+                    prog.track_events.sort((a, b) => {return a.at_time - b.at_time;});
+                    let r = isTrackEventsValid(prog);
+                    if (r) {
+                        updateField(["progs", i, "track_events"]);
+                    }
+                    return r;
+                };
                 gridItems.push(
                     <GridItem
                       progId={i}
                       progEvents={channelEvents[e.midi_note]}
-                      key={['GridItem', channelEvents[e.midi_note][0].at_time, i]}
+                      key={['GridItem', channelEvents[e.midi_note][0].id]}
+                      stageProps={stageProps}
+                      updateEvents={updateEvents}
                       />);
                 channelEvents[e.midi_note] = [];
                 break;
@@ -340,16 +347,102 @@ const Chart = props => {
         //console.log(channelEvents);
     }
 
+    return gridItems;
+};
+
+const Chart = props => {
+    // const ref = useRef();
+    // const [dim, setDim] = useState({
+    //     width: 0,
+    //     height: 0,
+    // });
+    // const [skipStage, setSkipStage] = useState(true);
+
+    // const autoSetDim = () => {
+    //     if (ref.current) {
+    //         setDim({
+    //             width: ref.current.offsetWidth,
+    //             height: ref.current.offsetHeight,
+    //         });
+    //     }
+    // };
+
+    // useEffect(() => {
+    //     autoSetDim();
+    //     setSkipStage(false);
+    // }, []);
+
+    // useEffect(() => {
+    //     let resize_timer = null;
+    //     const handler = () => {
+    //         clearInterval(resize_timer);
+    //         autoSetDim();
+    //         setSkipStage(true);
+    //         resize_timer = setTimeout(() => { setSkipStage(false); }, 200);
+    //     };
+
+    //     window.addEventListener('resize', handler);
+
+    //     return () => window.removeEventListener('resize', handler);
+    // }, []);
+    // const stageW = dim.width;// - 100;
+    // const stageH = dim.height;// - 100;
+
+    const tempoSecs = props.state.tempo / 60.0;
+    // TODO
+    let stageProps = {
+        width: 3000,
+        height: 2400,
+        beatSpacing: timeToX(1 / tempoSecs),
+    };
+    stageProps.beatSubSpacing = stageProps.beatSpacing / props.state.snap_denominator;
+
+    let stageElems = [];
+    stageElems.push(
+        <Grid
+          width={stageProps.width}
+          height={stageProps.height}
+          dir={GridDir.v}
+          span={stageProps.beatSubSpacing}
+          key='grid_v_sub'
+          color='#333333'
+          />);
+    stageElems.push(
+        <Grid
+          width={stageProps.width}
+          height={stageProps.height}
+          dir={GridDir.v}
+          span={stageProps.beatSpacing}
+          key='grid_v'
+          color='gray'
+          />);
+    stageElems.push(
+        <Grid
+          width={stageProps.width}
+          height={stageProps.height}
+          dir={GridDir.h}
+          span={keyScale}
+          key='grid_h'
+          color='gray'
+          />);
+
+    let gridItems = genGridItems(props.state.progs, stageProps, props.updateField);
+
     return (
         <div
           className="chart-container"
           >
           { //!skipStage &&
                   <Stage
-                        width={stageW} height={stageH}
+                        width={stageProps.width} height={stageProps.height}
                         >
-                        <Layer>
-                              {stageElems}
+                        <Layer
+                              onMouseDown={e => {
+                                  console.log(e.target);
+                              }}
+                              >
+                              <Rect width={stageProps.width} height={stageProps.height} />
+                                  {stageElems}
                                   {gridItems}
                             </Layer>
                       </Stage>
@@ -400,7 +493,7 @@ const CodeInput = props => {
           name={props.name}
           // editorProps={{ $blockScrolling: true }}
           />);
-}
+};
 
 const ProgInput = props => {
     return (
@@ -494,9 +587,26 @@ const NumInput = props => {
 }
 
 const App = props => {
-    const [state, setState] = useState({
-        progs: [],
+    // const [state, setState] = useState({
+    //     progs: [],
+    // });
+
+    const [stateHistory, setStateHistory] = useState({
+        nextIdx: 0,
+        states: [],
     });
+
+    const state = stateHistory.states.length > 0 ? stateHistory.states[stateHistory.nextIdx - 1] : {
+        progs: [],
+    };
+    const setState = (s) => {
+        // TODO loop around at some point instead of hemorrhaging gruesomely
+        let sh = {...stateHistory};
+        sh.nextIdx++;
+        sh.states.push(s);
+        setStateHistory(sh);
+        console.log("stateHistory ", sh);
+    };
 
     const [shouldUpdate, setShouldUpdate] = useState(false);
 
@@ -508,7 +618,7 @@ const App = props => {
             type: "getstate",
             contents: null,
         }));
-    }
+    };
 
     ws.onmessage = evt => {
         const message = JSON.parse(evt.data);
@@ -522,12 +632,13 @@ const App = props => {
         default:
             console.error("bad message type");
         }
-    }
+    };
 
     ws.onclose = () => {
         console.log('websocket disconnected');
-    }
+    };
 
+    console.log("state: ", state);
     let progs = state.progs;
 
     const setProgContents = (i, contents) => {
@@ -539,7 +650,7 @@ const App = props => {
             setState({
                 ...state,
                 progs: progs,
-            })
+            });
 
             setShouldUpdate(true);
         } else {
@@ -553,6 +664,7 @@ const App = props => {
             return;
         }
 
+        console.log("sending state");
         ws.send(JSON.stringify(
             {
                 type: "setstate",
@@ -561,7 +673,19 @@ const App = props => {
         ));
 
         setShouldUpdate(false);
-    }, [shouldUpdate, state, ws]);
+    }, [shouldUpdate, state, stateHistory, ws]);
+
+    // TODO since javascript hates immutability, does this
+    // even make sense to have?  (if it does, it'll probably
+    // only be for incremental updates)
+    const updateField = (accessors) => {
+        let s = state;
+        for (let i = 0; i < accessors.length; i++) {
+            s = s[accessors[i]];
+        }
+        setState(state);
+        setShouldUpdate(true);
+    };
 
     return (
         <div className="app-container">
@@ -581,93 +705,94 @@ const App = props => {
                     setState({
                         ...state,
                         prog_helpers: value,
-                    })
+                    });
                     setShouldUpdate(true);
                 }}
                 />
 
-                <button onClick={() => {
-                      ws.send(JSON.stringify(
-                          {
-                              type: "save",
-                              contents: {
-                                  // TODO
-                                  filename: "state.json",
-                              },
-                          }
-                      ));}
-                  }>
-                  Save
-                </button>
+          <button onClick={() => {
+                ws.send(JSON.stringify(
+                    {
+                        type: "save",
+                        contents: {
+                            // TODO
+                            filename: "state.json",
+                        },
+                    }
+                ));}
+            }>
+            Save
+          </button>
 
-                <button onClick={() => {
-                      ws.send(JSON.stringify(
-                          {
-                              type: "load",
-                              contents: {
-                                  // TODO
-                                  filename: "state.json",
-                              },
-                          }
-                      ));}
-                  }>
-                  Load
-                </button>
+          <button onClick={() => {
+                ws.send(JSON.stringify(
+                    {
+                        type: "load",
+                        contents: {
+                            // TODO
+                            filename: "state.json",
+                        },
+                    }
+                ));}
+            }>
+            Load
+          </button>
 
-                <br />
-                <br />
+          <br />
+          <br />
 
-                <button onClick={() => {
-                      ws.send(JSON.stringify(
-                          {
-                              type: "pause",
-                              contents: null,
-                          }
-                      ));}
-                  }>
-                  Pause
-                </button>
+          <button onClick={() => {
+                ws.send(JSON.stringify(
+                    {
+                        type: "pause",
+                        contents: null,
+                    }
+                ));}
+            }>
+            Pause
+          </button>
 
-                <button onClick={() => {
-                      ws.send(JSON.stringify(
-                          {
-                              type: "play",
-                              contents: null,
-                          }
-                      ));}
-                  }>
-                  Play
-                </button>
+          <button onClick={() => {
+                ws.send(JSON.stringify(
+                    {
+                        type: "play",
+                        contents: null,
+                    }
+                ));}
+            }>
+            Play
+          </button>
 
-                <br />
-                <br />
+          <br />
+          <br />
 
-                <NumInput
-                  stateVal={state.snap_denominator}
-                  updateState={(value) => {
-                      setState({
-                          ...state,
-                          snap_denominator: value,
-                      })
-                      setShouldUpdate(true);
-                  }}
-                  />
-                  <NumInput
-                    stateVal={state.tempo}
-                    updateState={(value) => {
-                        setState({
-                            ...state,
-                            tempo: value,
-                        })
-                        setShouldUpdate(true);
-                    }}
-                    />
-            </div>
-            <Chart
-              state={state}
+          <NumInput
+            stateVal={state.snap_denominator}
+            updateState={(value) => {
+                setState({
+                    ...state,
+                    snap_denominator: value,
+                });
+                setShouldUpdate(true);
+            }}
+            />
+            <NumInput
+              stateVal={state.tempo}
+              updateState={(value) => {
+                  setState({
+                      ...state,
+                      tempo: value,
+                  });
+                  setShouldUpdate(true);
+              }}
               />
-          </div>
-        </div>
+</div>
+<Chart
+  state={state}
+  updateField={updateField}
+  />
+</div>
+</div>
     );
 };
 

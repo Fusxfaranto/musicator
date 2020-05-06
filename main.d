@@ -74,6 +74,7 @@ struct State {
                 OFF,
             }
 
+            uint id;
             Type type;
             double at_time;
 
@@ -91,6 +92,7 @@ struct State {
     string prog_helpers;
     Prog[] progs;
     int midi_prog_idx;
+    uint next_prog_event_id;
 
     // TODO snap modes
     int snap_denominator;
@@ -293,6 +295,7 @@ void register_note_down(ubyte midi_note, ubyte midi_velocity) {
     // TODO should take prog id as arg
     // TODO sorting?
     State.Prog.ProgEvent prog_e;
+    prog_e.id = gstate.next_prog_event_id++;
     prog_e.type = State.Prog.ProgEvent.Type.ON;
     prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
@@ -306,6 +309,7 @@ void register_note_down(ubyte midi_note, ubyte midi_velocity) {
 void register_note_up(ubyte midi_note) {
     // TODO todos in register_note_down apply
     State.Prog.ProgEvent prog_e;
+    prog_e.id = gstate.next_prog_event_id++;
     prog_e.type = State.Prog.ProgEvent.Type.OFF;
     prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
@@ -322,12 +326,15 @@ void handle_midi_message(const ubyte[] message) {
         ubyte channel = message[0] & 0b00001111;
         //assert(upper != 0b10000000);
         switch (upper) {
+        case 0b10000000:
         case 0b10010000: {
                 assert(message.length == 3);
                 ubyte midi_note = message[1];
                 assert(midi_note < 128);
                 ubyte midi_velocity = message[2];
                 assert(midi_velocity < 128);
+
+                assert(upper != 0b10000000 || midi_velocity == 0);
 
                 key_held[midi_note] = midi_velocity > 0;
                 if (!midi_suspend || key_held[midi_note]) {
