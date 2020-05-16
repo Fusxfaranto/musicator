@@ -64,7 +64,7 @@ typedef struct {
 
 typedef struct AudioContext AudioContext;
 
-uint get_sample_rate(AudioContext* ctx);
+uint get_sample_count(AudioContext* ctx, double time);
 
 // TODO at some point going to need some sort of toposort to
 // figure out dependencies between different values (which
@@ -86,7 +86,7 @@ void stream_pause(AudioContext* ctx, uint stream_id);
 void stream_scrub(
         AudioContext* ctx,
         uint stream_id,
-        uint to_count);
+        double to_time);
 
 int start_audio(AudioContext** ctx);
 int stop_audio(AudioContext* ctx);

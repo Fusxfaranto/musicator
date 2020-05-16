@@ -63,7 +63,13 @@ struct State {
     }
 
     struct Prog {
+        enum Type {
+            MONOPHONIC,
+            POLYPHONIC,
+        }
+
         string name;
+        Type type;
         Var[] locals;
         string prog;
         @NoSerial CompiledProg compiled;
@@ -98,7 +104,7 @@ struct State {
     int snap_denominator;
     // TODO make tempo event-based, so it can be dynamic
     int tempo;
-    double last_snap;
+    double cursor = 0;
 }
 
 struct MidiControl {
@@ -251,27 +257,35 @@ void set_tuning(int key_code) {
 // TODO this should differentiate between up/down
 double note_snap() {
     double tempo_secs = gstate.tempo / 60.0;
-    gstate.last_snap += 1 / (gstate.snap_denominator * tempo_secs);
-    return gstate.last_snap;
+    gstate.cursor += 1 / (gstate.snap_denominator * tempo_secs);
+    return gstate.cursor;
 }
 
 void register_to_track(StreamId id, ref in State.Prog.ProgEvent prog_e) {
     Event e;
 
+    ulong at_count = 0;
+    if (id != StreamId.LIVE) {
+        at_count = get_sample_count(ctx, prog_e.at_time);
+    }
+    writeln(at_count);
+
     // TODO define these dynamically based on prog (which will need to be input to this fn)
     final switch (prog_e.type) {
     case State.Prog.ProgEvent.Type.ON:
         e.type = EventType.EVENT_WRITE;
-        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+        e.target_idx = get_name_idx(ctx, id,
                 format("test_note%s.volume", prog_e.midi_note).ptr);
         e.value.d = prog_e.midi_velocity / 128.;
-        add_event(ctx, StreamId.LIVE, &e);
+        e.at_count = at_count;
+        add_event(ctx, id, &e);
 
         e = Event.init;
         e.type = EventType.EVENT_WRITE_TIME;
-        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+        e.target_idx = get_name_idx(ctx, id,
                 format("test_note%s.started_at", prog_e.midi_note).ptr);
-        add_event(ctx, StreamId.LIVE, &e);
+        e.at_count = at_count;
+        add_event(ctx, id, &e);
 
         e = Event.init;
         e.type = EventType.EVENT_SETTER;
@@ -279,28 +293,32 @@ void register_to_track(StreamId id, ref in State.Prog.ProgEvent prog_e) {
                 gstate.progs[gstate.midi_prog_idx].compiled.fn,
                 key_local_idxs[prog_e.midi_note].ptr,
                 0, get_key_idx(prog_e.midi_note));
-        add_event(ctx, StreamId.LIVE, &e);
+        e.at_count = at_count;
+        add_event(ctx, id, &e);
         return;
 
     case State.Prog.ProgEvent.Type.OFF:
         e.type = EventType.EVENT_WRITE_TIME;
-        e.target_idx = get_name_idx(ctx, StreamId.LIVE,
+        e.target_idx = get_name_idx(ctx, id,
                 format("test_note%s.released_at", prog_e.midi_note).ptr);
-        add_event(ctx, StreamId.LIVE, &e);
+        e.at_count = at_count;
+        add_event(ctx, id, &e);
         return;
     }
 }
 
 void register_note_down(ubyte midi_note, ubyte midi_velocity) {
     // TODO should take prog id as arg
-    // TODO sorting?
+    State.Prog *prog = &gstate.progs[0];
     State.Prog.ProgEvent prog_e;
+
     prog_e.id = gstate.next_prog_event_id++;
     prog_e.type = State.Prog.ProgEvent.Type.ON;
     prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
     prog_e.midi_velocity = midi_velocity;
-    gstate.progs[0].track_events ~= prog_e;
+
+    prog.track_events ~= prog_e;
     register_to_track(StreamId.LIVE, prog_e);
 
     ws_should_update = true;
@@ -308,13 +326,16 @@ void register_note_down(ubyte midi_note, ubyte midi_velocity) {
 
 void register_note_up(ubyte midi_note) {
     // TODO todos in register_note_down apply
+    State.Prog *prog = &gstate.progs[0];
     State.Prog.ProgEvent prog_e;
+
     prog_e.id = gstate.next_prog_event_id++;
     prog_e.type = State.Prog.ProgEvent.Type.OFF;
     prog_e.at_time = note_snap();
     prog_e.midi_note = midi_note;
     prog_e.midi_velocity = 0;
-    gstate.progs[0].track_events ~= prog_e;
+
+    prog.track_events ~= prog_e;
     register_to_track(StreamId.LIVE, prog_e);
 
     ws_should_update = true;
@@ -503,6 +524,8 @@ void requeue_track_events() {
     foreach (ref pe; prog_es) {
         register_to_track(StreamId.TRACK, pe);
     }
+
+    stream_scrub(ctx, StreamId.TRACK, gstate.cursor);
 }
 
 void rebuild_state() {
@@ -579,11 +602,11 @@ void process_ws(ref WebSocket ws) {
     else if (message.type == "play") {
         // TODO stream id
         requeue_track_events();
-        stream_play(ctx, StreamId.LIVE);
+        stream_play(ctx, StreamId.TRACK);
     }
     else if (message.type == "pause") {
         // TODO stream id
-        stream_pause(ctx, StreamId.LIVE);
+        stream_pause(ctx, StreamId.TRACK);
     }
     else {
         assert(0);
@@ -716,7 +739,7 @@ void main() {
     scope (exit)
         enforce(stop_audio(ctx) == 0);
 
-    //sample_rate = get_sample_rate(ctx);
+    stream_play(ctx, StreamId.LIVE);
 
     // TODO
     load_state("state.json");

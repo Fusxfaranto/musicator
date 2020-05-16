@@ -112,8 +112,8 @@ double low_pass_filter(
            alpha * (current_sample - last_sample);
 }
 
-uint get_sample_rate(AudioContext* ctx) {
-    return ctx->sample_rate;
+uint get_sample_count(AudioContext* ctx, double time) {
+    return (uint)round((double)(ctx->sample_rate) * time);
 }
 
 // TODO control lock to make these thread safe?
@@ -284,7 +284,8 @@ static void jump_stream(StreamData* p, uint to_count) {
 void stream_scrub(
         AudioContext* ctx,
         uint stream_id,
-        uint to_count) {
+        double to_time) {
+    uint to_count = get_sample_count(ctx, to_time);
     StreamData* p = &(ctx->stream_data_buf[stream_id]);
     StreamState s = atomic_load(&p->stream_state);
     switch (s) {
@@ -331,7 +332,7 @@ static uint process_events(StreamData* p, uint64_t n) {
             return next_n;
         }
 
-        // printf("processing event %lu\n", p->event_pos);
+        printf("processing event %lu\n", p->event_pos);
 
         switch (e->type) {
         case EVENT_SETTER: {
@@ -595,6 +596,8 @@ static void init_stream_data(StreamData* p) {
     }
     atomic_store(&p->event_pos, 0);
     atomic_store(&p->event_reserved_pos, 0);
+
+    atomic_store(&p->stream_state, STREAM_PAUSED);
 }
 
 int start_audio(AudioContext** ctx) {

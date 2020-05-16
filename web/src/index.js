@@ -135,16 +135,7 @@ const GridItem = props => {
             assert(es[i].midi_note < 128);
         }
 
-        let r = props.updateEvents();
-
-        if (r === false) {
-            console.log("rolling back bad shift");
-            const esBackup = JSON.parse(esBackupStr);
-            console.log(esBackup);
-            for (let i = 0; i < es.length; i++) {
-                es[i] = esBackup[i];
-            }
-        }
+        props.updateEvents();
     };
 
     let items = [];
@@ -249,8 +240,7 @@ const Grid = props => {
               points={points}
               stroke={props.color}
               strokeWidth={1}
-              // TODO ??
-              key={i}
+              key={['Grid Line', i, props]}
               />);
     }
 
@@ -275,33 +265,6 @@ const genChannelEventsMap = (prog) => {
     return [...Array(numChannels)].map(a => []);
 };
 
-const isTrackEventsValid = (prog) => {
-    return true;
-
-    let channelEvents = genChannelEventsMap(prog);
-    for (let j = 0; j < prog.track_events.length; j++) {
-        let e = prog.track_events[j];
-        switch (e.type) {
-        case 'ON':
-            if (channelEvents[e.midi_note].length > 0) {
-                return false;
-            }
-            channelEvents[e.midi_note].push(e);
-            break;
-        case 'OFF':
-            if (channelEvents[e.midi_note].length <= 0) {
-                return false;
-            }
-            channelEvents[e.midi_note] = [];
-            break;
-        default:
-            return false;
-        }
-    }
-
-    return true;
-};
-
 const genGridItems = (progs, stageProps, updateField) => {
     let gridItems = [];
     for (let i = 0; i < progs.length; i++) {
@@ -323,11 +286,7 @@ const genGridItems = (progs, stageProps, updateField) => {
                 channelEvents[e.midi_note].push(e);
                 const updateEvents = () => {
                     prog.track_events.sort((a, b) => {return a.at_time - b.at_time;});
-                    let r = isTrackEventsValid(prog);
-                    if (r) {
-                        updateField(["progs", i, "track_events"]);
-                    }
-                    return r;
+                    updateField(["progs", i, "track_events"]);
                 };
                 gridItems.push(
                     <GridItem
@@ -426,7 +385,16 @@ const Chart = props => {
           color='gray'
           />);
 
-    let gridItems = genGridItems(props.state.progs, stageProps, props.updateField);
+    const cursorPos = timeToX(props.state.cursor) + gridStart();
+    stageElems.push(
+        <Line
+          points={[cursorPos, 0, cursorPos, stageProps.height]}
+          stroke='red'
+          strokeWidth={2}
+          key={['cursor']}
+          />);
+
+    let gridItems = genGridItems(props.state.progs, stageProps, props.ops.updateField);
 
     return (
         <div
@@ -584,29 +552,29 @@ const NumInput = props => {
           }}
           />
     );
-}
+};
 
 const App = props => {
-    // const [state, setState] = useState({
-    //     progs: [],
-    // });
-
-    const [stateHistory, setStateHistory] = useState({
-        nextIdx: 0,
-        states: [],
+    const [state, setState] = useState({
+        progs: [],
     });
 
-    const state = stateHistory.states.length > 0 ? stateHistory.states[stateHistory.nextIdx - 1] : {
-        progs: [],
-    };
-    const setState = (s) => {
-        // TODO loop around at some point instead of hemorrhaging gruesomely
-        let sh = {...stateHistory};
-        sh.nextIdx++;
-        sh.states.push(s);
-        setStateHistory(sh);
-        console.log("stateHistory ", sh);
-    };
+    // const maxStateHistory = 20;
+    // const [stateHistory, setStateHistory] = useState({
+    //     nextIdx: 0,
+    //     states: [],
+    // });
+
+    // const state = stateHistory.states.length > 0 ? stateHistory.states[stateHistory.nextIdx - 1] : {
+    //     progs: [],
+    // };
+    // const setState = (s) => {
+    //     let sh = {...stateHistory};
+    //     sh.nextIdx++;
+    //     sh.states.push(s);
+    //     setStateHistory(sh);
+    //     console.log("stateHistory ", sh);
+    // };
 
     const [shouldUpdate, setShouldUpdate] = useState(false);
 
@@ -673,18 +641,30 @@ const App = props => {
         ));
 
         setShouldUpdate(false);
-    }, [shouldUpdate, state, stateHistory, ws]);
+    }, [
+        shouldUpdate,
+        state,
+        //stateHistory,
+        ws,
+    ]);
 
-    // TODO since javascript hates immutability, does this
-    // even make sense to have?  (if it does, it'll probably
-    // only be for incremental updates)
-    const updateField = (accessors) => {
-        let s = state;
-        for (let i = 0; i < accessors.length; i++) {
-            s = s[accessors[i]];
-        }
-        setState(state);
-        setShouldUpdate(true);
+
+    const ops = {
+        // TODO since javascript hates immutability, does this
+        // even make sense to have?  (if it does, it'll probably
+        // only be for incremental updates)
+        updateField: (accessors) => {
+            let s = state;
+            for (let i = 0; i < accessors.length; i++) {
+                s = s[accessors[i]];
+            }
+            setState({...state});
+            setShouldUpdate(true);
+        },
+
+        undo: () => {
+
+        },
     };
 
     return (
@@ -710,89 +690,103 @@ const App = props => {
                 }}
                 />
 
-          <button onClick={() => {
-                ws.send(JSON.stringify(
-                    {
-                        type: "save",
-                        contents: {
-                            // TODO
-                            filename: "state.json",
-                        },
-                    }
-                ));}
-            }>
-            Save
-          </button>
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "save",
+                              contents: {
+                                  // TODO
+                                  filename: "state.json",
+                              },
+                          }
+                      ));}
+                  }>
+                  Save
+                </button>
 
-          <button onClick={() => {
-                ws.send(JSON.stringify(
-                    {
-                        type: "load",
-                        contents: {
-                            // TODO
-                            filename: "state.json",
-                        },
-                    }
-                ));}
-            }>
-            Load
-          </button>
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "load",
+                              contents: {
+                                  // TODO
+                                  filename: "state.json",
+                              },
+                          }
+                      ));}
+                  }>
+                  Load
+                </button>
 
-          <br />
-          <br />
+                <br />
+                <br />
 
-          <button onClick={() => {
-                ws.send(JSON.stringify(
-                    {
-                        type: "pause",
-                        contents: null,
-                    }
-                ));}
-            }>
-            Pause
-          </button>
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "pause",
+                              contents: null,
+                          }
+                      ));}
+                  }>
+                  Pause
+                </button>
 
-          <button onClick={() => {
-                ws.send(JSON.stringify(
-                    {
-                        type: "play",
-                        contents: null,
-                    }
-                ));}
-            }>
-            Play
-          </button>
+                <button onClick={() => {
+                      ws.send(JSON.stringify(
+                          {
+                              type: "play",
+                              contents: null,
+                          }
+                      ));
+                      ws.send(JSON.stringify(
+                          {
+                              type: "getstate",
+                              contents: null,
+                          }
+                      ));
+                      }
+                  }>
+                  Play
+                </button>
 
-          <br />
-          <br />
+                <button onClick={() => {
+                      state.cursor = 0;
+                      ops.updateField(["cursor"]);
+                  }}>
+                  Zero
+                </button>
 
-          <NumInput
-            stateVal={state.snap_denominator}
-            updateState={(value) => {
-                setState({
-                    ...state,
-                    snap_denominator: value,
-                });
-                setShouldUpdate(true);
-            }}
-            />
-            <NumInput
-              stateVal={state.tempo}
-              updateState={(value) => {
-                  setState({
-                      ...state,
-                      tempo: value,
-                  });
-                  setShouldUpdate(true);
-              }}
+                <br />
+                <br />
+
+                <NumInput
+                  stateVal={state.snap_denominator}
+                  updateState={(value) => {
+                      setState({
+                          ...state,
+                          snap_denominator: value,
+                      });
+                      setShouldUpdate(true);
+                  }}
+                  />
+                  <NumInput
+                    stateVal={state.tempo}
+                    updateState={(value) => {
+                        setState({
+                            ...state,
+                            tempo: value,
+                        });
+                        setShouldUpdate(true);
+                    }}
+                    />
+            </div>
+            <Chart
+              state={state}
+              ops={ops}
               />
-</div>
-<Chart
-  state={state}
-  updateField={updateField}
-  />
-</div>
-</div>
+          </div>
+        </div>
     );
 };
 
