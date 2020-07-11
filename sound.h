@@ -6,8 +6,11 @@
 typedef uint64_t uint;
 typedef _Bool bool;
 
-const bool false = 0;
-const bool true = 1;
+#ifndef DSTEP
+#define false 0
+#define true 1
+#else
+#endif
 
 #define PI 3.14159265358979323846
 

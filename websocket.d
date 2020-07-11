@@ -46,7 +46,7 @@ align(1):
               ));
     // dfmt on
 
-    ubyte* len_fields() const pure {
+    ubyte* len_fields() const pure return {
         return cast(ubyte*)(&this) + 2;
     }
 
@@ -147,7 +147,7 @@ struct WebSocket {
         return connection && connection.isAlive;
     }
 
-    private const(char)[] rawRecv(size_t recv_start) {
+    private const(char)[] rawRecv(size_t recv_start) return {
         auto n = connection.receive(buf[recv_start .. $]);
         if (n == Socket.ERROR) {
             if (!wouldHaveBlocked()) {

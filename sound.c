@@ -302,9 +302,68 @@ void stream_scrub(
     }
 }
 
+static void dump_events(StreamData* p) {
+    printf("\ndumping events\n");
+
+    int consecutive_uninitialized = 0;
+    for (uint i = 0; i < p->event_buf_size; i++) {
+        if (i == p->event_pos) {
+            printf("event pos at %lu\n", i);
+        }
+
+        EventState s = atomic_load(&p->event_state_buf[i]);
+
+        if (s == EVENT_STATE_UNINITIALIZED) {
+            consecutive_uninitialized++;
+            continue;
+        }
+
+        if (consecutive_uninitialized > 0) {
+            printf("%d uninitialized\n",
+                   consecutive_uninitialized);
+            consecutive_uninitialized = 0;
+        }
+
+        switch (s) {
+        case EVENT_STATE_UNINITIALIZED:
+            assert(0);
+
+        case EVENT_STATE_READY:
+            printf("%lu: ready\n", i);
+            break;
+
+        case EVENT_STATE_PROCESSED:
+            printf("%lu: processed\n", i);
+            break;
+        }
+
+        Event e = p->event_buf[i];
+        printf("type: ");
+        switch (e.type) {
+        case EVENT_SETTER:
+            printf("EVENT_SETTER\n");
+            printf("%p\n", (void*)(uintptr_t)e.setter.fn);
+            break;
+        case EVENT_WRITE:
+            printf("EVENT_WRITE\n");
+            break;
+        case EVENT_WRITE_TIME:
+            printf("EVENT_WRITE_TIME\n");
+            break;
+        case EVENT_RESET_STREAM:
+            printf("EVENT_RESET_STREAM\n");
+            break;
+        }
+
+        printf("at_count: %lu\n", e.at_count);
+    }
+}
+
 static uint process_events(StreamData* p, uint64_t n) {
     uint next_n;
     uint64_t end = p->c + n;
+
+    //dump_events(p);
 
     for (;;) {
         if (atomic_load(

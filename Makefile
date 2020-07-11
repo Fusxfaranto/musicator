@@ -6,6 +6,9 @@ D_SRCS := $(wildcard *.d)
 C_OBJS := $(patsubst %.c,out/%.o,$(C_SRCS))
 D_OBJS := $(patsubst %.d,out/%.o,$(D_SRCS))
 OBJS := $(C_OBJS) $(D_OBJS)
+
+DEMO_SRCS := $(wildcard demos/*.c)
+DEMO_BINS := $(patsubst demos/%.c,out/%,$(DEMO_SRCS))
 #INCLUDE_DIRS :=
 #LIBRARY_DIRS :=
 #LIBRARIES :=
@@ -18,7 +21,7 @@ OBJS := $(C_OBJS) $(D_OBJS)
 DC := ldc2
 #DC := dmd
 
-CFLAGS := -m64 -fPIC -g -c -O0 -std=c11 -pedantic -Wall -Werror -Wno-error=unused-variable -Wmissing-field-initializers -Wconversion -Iinclude #-I/usr/include/freetype2/ #-Iftgl/src/
+CFLAGS := -m64 -fPIC -g -O0 -std=c11 -pedantic -Wall -Werror -Wno-error=unused-variable -Wno-error=unused-function -Wmissing-field-initializers -Wconversion -Iinclude #-I/usr/include/freetype2/ #-Iftgl/src/
 CFLAGS += -Icubeb/include/ -Icubeb/build/exports/
 #CLDFLAGS += -Lcubeb/build/ -llibcubeb
 CSTATIC_LIBS := cubeb/build/libcubeb.a
@@ -41,17 +44,23 @@ LDFLAGS += -L=-Ltcc -L=-l:libtcc.a
 
 RTMIDI_OBJS := out/rtmidi/rtmidi.o out/rtmidi/rtmidi_c.o
 
-.PHONY: all clean distclean
+DEMO_LDFLAGS += -Llib -Lout -l:libmusicator.a -ldl -lasound -lpthread -lm -lstdc++
 
-all: $(NAME)
+.PHONY: all demos clean distclean
+
+all: $(NAME) $(DEMO_BINS)
 
 $(NAME): $(D_OBJS) out/libmusicator.a $(RTMIDI_OBJS)
 #	$(DC) $(OBJS) $(LDFLAGS) -o $(NAME)
 	$(DC) $(OBJS) $(RTMIDI_OBJS) $(LDFLAGS) -of$(NAME)
 
+demos: $(DEMO_BINS)
+$(DEMO_BINS): out/% : demos/%.c out/libmusicator.a
+	$(CC) $< $(CFLAGS) $(DEMO_LDFLAGS) -o $@
+
 $(D_OBJS): $(D_SRCS) $(C_HEADERS)
 #	dstep $(C_HEADERS) $(CFLAGS) -o ./bindings/
-	dstep $(C_HEADERS) $(CFLAGS) -o c_bindings.d
+	dstep $(C_HEADERS) $(CFLAGS) -DDSTEP -o c_bindings.d
 	$(DC) $(D_SRCS) $(DFLAGS) -od=out
 
 $(RTMIDI_OBJS): rtmidi/*.cpp rtmidi/*.h
@@ -71,7 +80,7 @@ out/libmusicator.a: $(C_OBJS)
 	$(AR) -M < out/ar_script.mri
 
 $(C_OBJS): $(C_SRCS) $(C_HEADERS)
-	$(CC) $(C_SRCS) $(CFLAGS) -o $@
+	$(CC) $(C_SRCS) $(CFLAGS) -c -o $@
 
 clean:
 	@- $(RM) $(NAME)
